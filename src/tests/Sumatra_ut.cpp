@@ -9,6 +9,7 @@
 #include "base/DbgHelpDyn.h"
 #include "base/File.h"
 #include "base/Pixmap.h"
+#include "base/SettingsUtil.h"
 
 #include "gui/UIModels.h"
 #include "gui/Layout.h"
@@ -24,6 +25,10 @@
 #include "AppSettings.h"
 #include "Flags.h"
 #include "Commands.h"
+#include "Annotation.h"
+#include "CommandAvailability.h"
+#include "CommandPalette.h"
+#include "CommandPaletteCommon.h"
 #include "SvgIcons.h"
 #include "AppUnitTests.h"
 #include "PDFScript.h"
@@ -87,6 +92,7 @@ bool MarkdownModel_UnitTestBrowserNavigationUrl();
 bool MarkdownToc_UnitTestHtmlLinks();
 bool MarkdownToc_UnitTestHtmlHeadings();
 bool MarkdownToc_UnitTestMermaid();
+bool MarkdownToc_TestLineBreaks();
 bool EbookDoc_UnitTestNormalizeURL();
 bool EbookDoc_UnitTestLoading();
 bool GumboHtmlParser_UnitTest();
@@ -106,6 +112,42 @@ bool ShortcutParse_UnitTestShiftedPunct();
 bool AnnotSearch_UnitTests();
 void ReadAloudHighlight_UnitTests();
 bool RenderCache_UnitTestCookieUnlocked();
+bool RenderCache_UnitTestFullOfOneVisiblePage();
+
+// a color setting's row gets a swatch of its value, or of the value being typed
+static void PaletteRowColorTest() {
+    Settings* prevSettings = gSettings;
+    if (!gSettings) {
+        gSettings = NewSettings({});
+    }
+
+    StrVecCP rows;
+    CollectSettingRows(rows);
+    // an unset (empty) color has no swatch
+    int nSwatches = 0;
+    Color col;
+    for (int i = 0; i < len(rows); i++) {
+        ItemDataCP* d = rows.AtData(i);
+        if (!PaletteRowColor(d, rows[i], &col)) {
+            continue;
+        }
+        utassert(d->settingType == SettingType::Color);
+        nSwatches++;
+    }
+    utassert(nSwatches > 0);
+
+    ItemDataCP typed;
+    typed.settingType = SettingType::Color;
+    typed.settingPath = StrL("FixedPageUI.TextColor");
+    utassert(PaletteRowColor(&typed, StrL("#ff0000"), &col));
+    utassert(col == kColRed);
+    utassert(!PaletteRowColor(&typed, StrL("not a color"), &col));
+
+    if (!prevSettings) {
+        DeleteSettings(gSettings);
+        gSettings = nullptr;
+    }
+}
 
 static void ParseCommandLineTest() {
     {
@@ -264,6 +306,7 @@ static void SumatraPDF_UnitTests() {
     UpdateCheckDecisionTest();
     CachedObjects_UnitTests();
     CommandPaletteModel_UnitTests();
+    PaletteRowColorTest();
     DocPropertiesTest();
     parseCommandsTest();
     colorTest();
@@ -487,6 +530,7 @@ int RunAppUnitTests(bool forAi) {
     utassert(MarkdownToc_UnitTestHtmlLinks());
     utassert(MarkdownToc_UnitTestHtmlHeadings());
     utassert(MarkdownToc_UnitTestMermaid());
+    utassert(MarkdownToc_TestLineBreaks());
     utassert(EbookDoc_UnitTestNormalizeURL());
     utassert(EbookDoc_UnitTestLoading());
     utassert(GumboHtmlParser_UnitTest());
@@ -505,6 +549,7 @@ int RunAppUnitTests(bool forAi) {
     utassert(ShortcutParse_UnitTestShiftedPunct());
     utassert(AnnotSearch_UnitTests());
     utassert(RenderCache_UnitTestCookieUnlocked());
+    utassert(RenderCache_UnitTestFullOfOneVisiblePage());
     ReadAloudHighlight_UnitTests();
 #endif
     return utassert_print_results();

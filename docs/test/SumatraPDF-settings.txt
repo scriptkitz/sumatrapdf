@@ -83,6 +83,7 @@ EngineeringDrawingEnhance = off
 DisableAutoLinks = false
 UseSysColors = false
 UseTabs = true
+ShowCaption = true
 SelectionToolbar = true
 TabsMru = false
 CtrlTabSimple = false
@@ -102,6 +103,7 @@ FixedPageUI [
 		Subdivisions = 4
 		OffsetX = 0
 		OffsetY = 0
+		Slant = 90
 		Color = #8080ff
 		Style = dots
 		Units = in
@@ -139,6 +141,7 @@ ChmUI [
 
 MarkdownUI [
 	UseFixedPageUI = false
+	PreserveLineBreaks = false
 ]
 
 HtmlUI [

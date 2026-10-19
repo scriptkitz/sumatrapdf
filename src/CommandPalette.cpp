@@ -160,6 +160,7 @@ constexpr int kPaletteInsetDx = 8;
 constexpr int kPalettePadDx = 16;
 constexpr int kPaletteQueryPadDy = 6;
 constexpr int kPaletteSelectionRadius = 4;
+constexpr int kPaletteSwatchDx = 12;
 
 static PlatformFont* PaletteFont(int px) {
     return GetUserGuiFont(StrL("Segoe UI"), DpiScale(px));
@@ -1362,6 +1363,10 @@ static TempStr UpdateCommandNameTemp(MainWindow* win, int cmdId, Str s) {
             bool visible = SettingsUseTabs() ? gSettings->showMenubarWithTabs : gSettings->showMenubar;
             newIsOn = !visible;
         } break;
+        case CmdToggleCaption: {
+            isToggle = true;
+            newIsOn = !gSettings->showCaption;
+        } break;
         case CmdToggleBookmarks:
         case CmdToggleTableOfContents: {
             isToggle = true;
@@ -1885,6 +1890,23 @@ void CommandPaletteWnd::DrawListBoxItem(VirtListBox::DrawItemEvent* ev) {
                 rcText.dx -= rightW + gap;
             }
         }
+    }
+
+    // a color setting shows its color before the value, as in advanced settings
+    Color swatch;
+    if (PaletteRowColor(data, itemText, &swatch)) {
+        int dx = DpiScale(kPaletteSwatchDx);
+        int gap = DpiScale(8);
+        Rect rs{0, rc.y + (rc.dy - dx) / 2, dx, dx};
+        if (isRtl) {
+            rs.x = rcText.x;
+            rcText.x += dx + gap;
+        } else {
+            rs.x = rcText.Right() - dx;
+        }
+        rcText.dx -= dx + gap;
+        gfx->FillRect(rs, swatch);
+        gfx->DrawRect(rs, ThemeEdgeColor());
     }
 
     {

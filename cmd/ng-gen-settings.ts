@@ -462,6 +462,12 @@ const pageGrid: Field[] = [
   field("Subdivisions", Int, 4, "minor lines per major cell").ver("3.7"),
   field("OffsetX", Float, 0, "horizontal origin offset from the left of the page, in PDF points").ver("3.7"),
   field("OffsetY", Float, 0, "vertical origin offset from the bottom of the page, in PDF points").ver("3.7"),
+  field(
+    "Slant",
+    Float,
+    90,
+    "angle of the vertical grid lines from the rightward horizontal, in degrees. 90 is upright; 52 to 60 leans right for calligraphy",
+  ).ver("3.7"),
   field("Color", Color, rgb(128, 128, 255), "color of the page grid overlay").ver("3.7"),
   field("Style", Str, "dots", "grid overlay style: dots (marks at intersections), dotted (dotted lines), or solid")
     .enum(["dots", "dotted", "solid"])
@@ -513,7 +519,7 @@ const fixedPageUI: Field[] = [
   struct(
     "PageGrid",
     pageGrid,
-    "measurement grid overlay (View > Page Grid). Spacing and style are saved; showing the grid is session-only",
+    "measurement grid overlay (View > Page Grid). Spacing, slant and style are saved; showing the grid is session-only. Drag a grid line while Configure Page Grid is open, or Alt+drag, to resize cells with equal width and height",
   ).ver("3.7"),
 ];
 
@@ -628,6 +634,12 @@ const markdownUI: Field[] = [
     false,
     "if true, use MuPDF (cmark-gfm) to render markdown; if false, use WebView2 browser view when available",
   ),
+  field(
+    "PreserveLineBreaks",
+    Bool,
+    false,
+    "if true, preserve source line breaks in the Markdown browser view; false uses standard Markdown paragraph wrapping",
+  ).ver("3.7"),
 ];
 
 const htmlUI: Field[] = [
@@ -1191,6 +1203,18 @@ const fileState: Field[] = [
     false,
     "if true, the view can be panned past the page edges, so any part of a page can be brought to the center of the window",
   ).ver("3.7"),
+  field(
+    "Brightness",
+    Int,
+    0,
+    "brightness of rendered pages, -100 to 100; 0 leaves them unchanged. Set with CmdAdjustBrightness",
+  ).ver("3.7"),
+  field(
+    "Contrast",
+    Int,
+    0,
+    "contrast of rendered pages, -100 to 100; 0 leaves them unchanged. Set with CmdAdjustContrast",
+  ).ver("3.7"),
   field("BgCol", Color, "", "if given, overrides the background color for this document").ver("3.7"),
   field("TabCol", Color, "", "if given, overrides the tab color for this document").ver("3.7"),
   compactArray(
@@ -1233,6 +1257,8 @@ const fileStateLayout = [
   "PageNo",
   "PageCount",
   "Rotation",
+  "Brightness",
+  "Contrast",
   "WindowState",
   "SidebarDx",
   "Index",
@@ -1639,10 +1665,10 @@ const globalPrefs: Field[] = [
   field(
     "Scrollbars",
     Str,
-    "windows",
-    "scrollbar mode: windows (standard Windows scrollbar), smart (overlay scrollbar with auto-hide), overlay (always visible overlay scrollbar), hidden (no scrollbars)",
+    "smart",
+    "scrollbar mode: smart (overlay scrollbar with auto-hide), overlay (always visible overlay scrollbar), hidden (no scrollbars)",
   )
-    .enum(["windows", "smart", "overlay", "hidden"])
+    .enum(["smart", "overlay", "hidden"])
     .ver("3.7"),
   field("ScrollbarInSinglePage", Bool, false, "if true, show a scrollbar in single page mode as well").ver("3.6"),
   field(
@@ -1867,6 +1893,12 @@ const globalPrefs: Field[] = [
     "if true, use the Windows system colors for the document background and text. Overrides other color settings",
   ),
   field("UseTabs", Bool, true, "if true, documents are opened in tabs instead of new windows").ver("3.0"),
+  field(
+    "ShowCaption",
+    Bool,
+    true,
+    "show the caption; when hidden, hover at the top to reveal it. Toggle with Shift+F8",
+  ).ver("3.7"),
   field(
     "SelectionToolbar",
     Bool,
@@ -2232,6 +2264,7 @@ const globalPrefsLayout = [
   "DisableAutoLinks",
   "UseSysColors",
   "UseTabs",
+  "ShowCaption",
   "SelectionToolbar",
   "TabsMru",
   "CtrlTabSimple",

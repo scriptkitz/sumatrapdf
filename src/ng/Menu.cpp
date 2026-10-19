@@ -160,6 +160,10 @@ static MenuDef menuDefContext[] = {
         CmdToggleToolbar,
     },
     {
+        TrN("Show Caption"),
+        CmdToggleCaption,
+    },
+    {
         StrL(kMenuSeparator),
         kMenuSeparatorID,
     },
@@ -520,9 +524,11 @@ MenuModel* BuildMenuFromDef(MenuDef* menuDef, BuildMenuCtx* ctx) {
         }
         // custom selection handlers go before the built-in translate / search submenus
         if (md.idOrSubmenu == (UINT_PTR)menuDefTranslateWith) {
-            if (menuDef == menuDefMainSelection) {
+            // handlers run on selected text; comics and images have none
+            bool canSelectText = !ctx || !ctx->isImageCollection;
+            if (canSelectText && menuDef == menuDefMainSelection) {
                 AppendSelectionHandlersToMenu(menu, true);
-            } else if (menuDef == menuDefSelection) {
+            } else if (canSelectText && menuDef == menuDefSelection) {
                 AppendSelectionHandlersToMenu(menu, ctx ? ctx->hasSelection : false);
             }
         }
@@ -676,6 +682,10 @@ static void SetMenuChecks(MenuModel* menu, MainWindow* win) {
         }
         if (it.cmdId == CmdTogglePageGrid) {
             it.checked = ShowPageGrid();
+            continue;
+        }
+        if (it.cmdId == CmdToggleCaption) {
+            it.checked = gSettings->showCaption;
             continue;
         }
         if (it.cmdId == CmdToggleBookmarks || it.cmdId == CmdToggleTableOfContents) {

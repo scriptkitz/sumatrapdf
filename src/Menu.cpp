@@ -231,6 +231,10 @@ static MenuDef menuDefContext[] = {
         CmdToggleToolbar,
     },
     {
+        TrN("Show Caption"),
+        CmdToggleCaption,
+    },
+    {
         StrL(kMenuSeparator),
         kMenuSeparatorID,
     },
@@ -540,9 +544,11 @@ HMENU BuildMenuFromDef(MenuDef* menuDef, HMENU menu, BuildMenuCtx* ctx) {
 
         // custom selection handlers go before the built-in translate / search submenus
         if (md.idOrSubmenu == (UINT_PTR)menuDefTranslateWith) {
-            if (menuDef == menuDefMainSelection) {
+            // handlers run on selected text; comics and images have none
+            bool canSelectText = !ctx || !ctx->isImageCollection;
+            if (canSelectText && menuDef == menuDefMainSelection) {
                 AppendSelectionHandlersToMenu(menu, true);
-            } else if (menuDef == menuDefSelection) {
+            } else if (canSelectText && menuDef == menuDefSelection) {
                 AppendSelectionHandlersToMenu(menu, ctx ? ctx->hasSelection : false);
             }
         }
@@ -896,6 +902,7 @@ static void MenuUpdateStateForWindow(MainWindow* win) {
         MenuSetChecked(win->menu, CmdToggleToolbar, toolbarOn);
     }
     MenuSetChecked(win->menu, CmdToggleMenuBar, gSettings->showMenubar);
+    MenuSetChecked(win->menu, CmdToggleCaption, gSettings->showCaption);
     // CmdChangeScrollbar doesn't need a check mark - it opens a dialog
     MenuUpdateDisplayMode(win);
     MenuUpdateZoom(win);

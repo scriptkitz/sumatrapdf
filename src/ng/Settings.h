@@ -304,6 +304,12 @@ struct FileState {
     int pageCount;
     // how far pages have been rotated as a multiple of 90 degrees
     int rotation;
+    // brightness of rendered pages, -100 to 100; 0 leaves them unchanged.
+    // Set with CmdAdjustBrightness
+    int brightness;
+    // contrast of rendered pages, -100 to 100; 0 leaves them unchanged.
+    // Set with CmdAdjustContrast
+    int contrast;
     // state of the window. 1 is normal, 2 is maximized, 3 is fullscreen, 4
     // is minimized
     int windowState;
@@ -658,8 +664,10 @@ struct ComicBookUI {
     bool landscapeAsSpread;
 };
 
-// measurement grid overlay (View > Page Grid). Spacing and style are
-// saved; showing the grid is session-only
+// measurement grid overlay (View > Page Grid). Spacing, slant and style
+// are saved; showing the grid is session-only. Drag a grid line while
+// Configure Page Grid is open, or Alt+drag, to resize cells with equal
+// width and height
 struct PageGrid {
     // distance between major vertical grid lines, in PDF points (1/72
     // inch)
@@ -672,6 +680,9 @@ struct PageGrid {
     float offsetX;
     // vertical origin offset from the bottom of the page, in PDF points
     float offsetY;
+    // angle of the vertical grid lines from the rightward horizontal, in
+    // degrees. 90 is upright; 52 to 60 leans right for calligraphy
+    float slant;
     // color of the page grid overlay
     ParsedColor color;
     // grid overlay style: dots (marks at intersections), dotted (dotted
@@ -709,8 +720,10 @@ struct FixedPageUI {
     Vec<Str>* gradientColors;
     // if given, sets the canvas background color for PDF files
     ParsedColor windowBgCol;
-    // measurement grid overlay (View > Page Grid). Spacing and style are
-    // saved; showing the grid is session-only
+    // measurement grid overlay (View > Page Grid). Spacing, slant and
+    // style are saved; showing the grid is session-only. Drag a grid line
+    // while Configure Page Grid is open, or Alt+drag, to resize cells with
+    // equal width and height
     PageGrid pageGrid;
 };
 
@@ -820,6 +833,9 @@ struct MarkdownUI {
     // if true, use MuPDF (cmark-gfm) to render markdown; if false, use
     // WebView2 browser view when available
     bool useFixedPageUI;
+    // if true, preserve source line breaks in the Markdown browser view;
+    // false uses standard Markdown paragraph wrapping
+    bool preserveLineBreaks;
 };
 
 // customization options for HTML UI. If UseFixedPageUI is true, MuPDF
@@ -913,9 +929,8 @@ struct Settings {
     // where the toolbar is placed: top or bottom (applies to both show and
     // overlay modes)
     Str toolbarPosition;
-    // scrollbar mode: windows (standard Windows scrollbar), smart (overlay
-    // scrollbar with auto-hide), overlay (always visible overlay
-    // scrollbar), hidden (no scrollbars)
+    // scrollbar mode: smart (overlay scrollbar with auto-hide), overlay
+    // (always visible overlay scrollbar), hidden (no scrollbars)
     Str scrollbars;
     // voice id for Read Aloud text-to-speech; empty or unset means system
     // default. Voice ids match those used internally by the Read Aloud
@@ -1275,6 +1290,9 @@ struct Settings {
     bool useSysColors;
     // if true, documents are opened in tabs instead of new windows
     bool useTabs;
+    // show the caption; when hidden, hover at the top to reveal it. Toggle
+    // with Shift+F8
+    bool showCaption;
     // if true, a small floating toolbar with selection actions (copy, read
     // aloud, highlight etc.) pops up after selecting text. Set to false to
     // disable it
@@ -1309,7 +1327,7 @@ struct FieldInfo;
 struct StructInfo;
 extern const StructInfo gFavoriteInfo;
 extern const StructInfo gFileEBookUIInfo;
-extern const FieldInfo gFileStateFields[26];
+extern const FieldInfo gFileStateFields[28];
 extern StructInfo gFileStateInfo;
 extern const StructInfo gTabStateInfo;
 extern const StructInfo gSessionDataInfo;

@@ -117,6 +117,9 @@
     <ClInclude Include="..\ext\darkmodelib\src\Version.h">
       <Filter>ext\darkmodelib\src</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\BrightnessContrastDialog.h">
+      <Filter>src</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\Canvas.h">
       <Filter>src</Filter>
     </ClInclude>
@@ -283,6 +286,9 @@
       <Filter>src\shared</Filter>
     </ClInclude>
     <ClInclude Include="..\src\shared\AvifReader.h">
+      <Filter>src\shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\shared\BrightnessContrastDialogCommon.h">
       <Filter>src\shared</Filter>
     </ClInclude>
     <ClInclude Include="..\src\shared\BrowserViewCommon.h">
@@ -752,6 +758,9 @@
     <ClCompile Include="..\src\BasePch.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\BrightnessContrastDialog.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\Canvas.cpp">
       <Filter>src</Filter>
     </ClCompile>
@@ -1167,6 +1176,9 @@
       <Filter>src\shared</Filter>
     </ClCompile>
     <ClCompile Include="..\src\shared\AvifReader.cpp">
+      <Filter>src\shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\BrightnessContrastDialogCommon.cpp">
       <Filter>src\shared</Filter>
     </ClCompile>
     <ClCompile Include="..\src\shared\BrowserViewCommon.cpp">

@@ -91,6 +91,8 @@ const user32 = loadDll("user32.dll", {
   GetSystemMetrics: { args: [FFIType.i32], returns: FFIType.i32 },
   SystemParametersInfoW: { args: [FFIType.u32, FFIType.u32, FFIType.ptr, FFIType.u32], returns: FFIType.bool },
   SetProcessDpiAwarenessContext: { args: [FFIType.i64], returns: FFIType.bool },
+  InitializeTouchInjection: { args: [FFIType.u32, FFIType.u32], returns: FFIType.bool },
+  InjectTouchInput: { args: [FFIType.u32, FFIType.ptr], returns: FFIType.bool },
   GetCursorPos: { args: [FFIType.ptr], returns: FFIType.bool },
   GetGUIThreadInfo: { args: [FFIType.u32, FFIType.ptr], returns: FFIType.bool },
   GetCursorInfo: { args: [FFIType.ptr], returns: FFIType.bool },
@@ -118,6 +120,8 @@ const user32 = loadDll("user32.dll", {
   OpenClipboard: { args: [FFIType.ptr], returns: FFIType.bool },
   CloseClipboard: { args: [], returns: FFIType.bool },
   GetClipboardData: { args: [FFIType.u32], returns: FFIType.u64 },
+  EnumClipboardFormats: { args: [FFIType.u32], returns: FFIType.u32 },
+  EmptyClipboard: { args: [], returns: FFIType.bool },
 });
 
 // GDI + GDI+ for capturing a window to a PNG (see captureWindowToPng). Capturing
@@ -1198,6 +1202,86 @@ function readClipboardText(): string | null {
   }
 }
 
+export const CF_BITMAP = 2;
+export const CF_DIB = 8;
+export const CF_DIBV5 = 17;
+
+// The formats on the clipboard, in the order they were put there (synthesized
+// ones like CF_DIB from CF_BITMAP included). null when it can't be opened.
+export function getClipboardFormats(): number[] | null {
+  if (!user32.symbols.OpenClipboard(null)) {
+    return null;
+  }
+  try {
+    const out: number[] = [];
+    for (let f = user32.symbols.EnumClipboardFormats(0); f !== 0; f = user32.symbols.EnumClipboardFormats(f)) {
+      out.push(f);
+    }
+    return out;
+  } finally {
+    user32.symbols.CloseClipboard();
+  }
+}
+
+// What a pasting app gets for CF_DIB: the bitmap's size and how many of its
+// pixels are not black, read from the header and pixel bytes. null when there
+// is no CF_DIB (or the clipboard can't be opened).
+export function getClipboardDibInfo(): { width: number; height: number; bitCount: number; nonBlack: number } | null {
+  if (!user32.symbols.OpenClipboard(null)) {
+    return null;
+  }
+  try {
+    const h = user32.symbols.GetClipboardData(CF_DIB);
+    if (!h) {
+      return null;
+    }
+    const mem = kernel32.symbols.GlobalLock(h);
+    if (!mem) {
+      return null;
+    }
+    try {
+      const size = Number(kernel32.symbols.GlobalSize(h));
+      const buf = Buffer.from(toArrayBuffer(mem, 0, size));
+      const hdrSize = buf.readUInt32LE(0);
+      const width = buf.readInt32LE(4);
+      const height = Math.abs(buf.readInt32LE(8));
+      const bitCount = buf.readUInt16LE(14);
+      const compression = buf.readUInt32LE(16);
+      // BI_BITFIELDS puts three color masks after a BITMAPINFOHEADER
+      const bitsAt = hdrSize + (compression === 3 && hdrSize === 40 ? 12 : 0);
+      const bpp = bitCount / 8;
+      const stride = Math.ceil((width * bitCount) / 32) * 4;
+      let nonBlack = 0;
+      if (bpp >= 3) {
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const i = bitsAt + y * stride + x * bpp;
+            if (i + 2 < buf.length && (buf[i]! | buf[i + 1]! | buf[i + 2]!) !== 0) {
+              nonBlack++;
+            }
+          }
+        }
+      }
+      return { width, height, bitCount, nonBlack };
+    } finally {
+      kernel32.symbols.GlobalUnlock(h);
+    }
+  } finally {
+    user32.symbols.CloseClipboard();
+  }
+}
+
+export function emptyClipboard(): boolean {
+  if (!user32.symbols.OpenClipboard(null)) {
+    return false;
+  }
+  try {
+    return user32.symbols.EmptyClipboard();
+  } finally {
+    user32.symbols.CloseClipboard();
+  }
+}
+
 export async function getClipboardText(timeoutMs = 1000): Promise<string> {
   if (IS_MAC) {
     const deadline = Date.now() + timeoutMs;
@@ -1379,6 +1463,36 @@ export function setProcessDpiAware(): boolean {
   }
   // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 == (HANDLE)-4
   return user32.symbols.SetProcessDpiAwarenessContext(-4n as unknown as number);
+}
+
+// Touch injection: unlike SendInput mouse/keyboard, it reaches the app on this
+// machine. Coordinates are screen pixels (physical once setProcessDpiAware()).
+export const POINTER_FLAG_DOWN = 0x10000;
+export const POINTER_FLAG_UPDATE = 0x20000;
+export const POINTER_FLAG_UP = 0x40000;
+const POINTER_FLAG_INRANGE = 0x2;
+const POINTER_FLAG_INCONTACT = 0x4;
+const PT_TOUCH = 2;
+const TOUCH_FEEDBACK_NONE = 3;
+// sizeof(POINTER_TOUCH_INFO) on x64; ptPixelLocation is at 32
+const kPointerTouchInfoSize = 144;
+let touchInjectionReady = false;
+
+export function injectTouch(x: number, y: number, flag: number): boolean {
+  if (!IS_WIN) {
+    return false;
+  }
+  if (!touchInjectionReady) {
+    touchInjectionReady = user32.symbols.InitializeTouchInjection(1, TOUCH_FEEDBACK_NONE);
+  }
+  const buf = new Uint8Array(kPointerTouchInfoSize);
+  const v = new DataView(buf.buffer);
+  v.setUint32(0, PT_TOUCH, true);
+  const contact = flag === POINTER_FLAG_UP ? 0 : POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT;
+  v.setUint32(12, flag | contact, true);
+  v.setInt32(32, x, true);
+  v.setInt32(36, y, true);
+  return user32.symbols.InjectTouchInput(1, ptr(buf));
 }
 
 // The real cursor position, in screen (physical, when this process is DPI

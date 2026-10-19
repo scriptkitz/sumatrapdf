@@ -2747,6 +2747,35 @@ void OnThumbnailsTypeChanged() {
     RunAsync(fn, StrL("RegenerateThumbnails"));
 }
 
+// Home-page files that still exist but have no cached thumbnail.
+void RegenerateMissingThumbnails() {
+    // -for-testing launches constantly and must not render the user's history
+    if (gForTesting || gPluginMode || !HasPermission(Perm::SavePreferences)) {
+        return;
+    }
+#if OS_WASM
+    // StartThread runs inline, so a batch of renders would freeze startup
+    return;
+#endif
+    Vec<FileState*> list;
+    CollectThumbnailFiles(list);
+    auto* data = new RegenerateThumbnailsData();
+    for (FileState* fs : list) {
+        TempStr thumbPath = GetThumbnailPathTemp(fs->filePath);
+        if (len(thumbPath) == 0 || file::Exists(thumbPath)) {
+            continue;
+        }
+        VecAppend(data->files, NewThumbnailData(fs));
+    }
+    if (len(data->files) == 0) {
+        delete data;
+        return;
+    }
+    logf("RegenerateMissingThumbnails: %d\n", len(data->files));
+    auto fn = MkFunc0<RegenerateThumbnailsData>(RegenerateThumbnailsThread, data);
+    RunAsync(fn, StrL("RegenerateThumbnails"));
+}
+
 int SidebarExtraDx(MainWindow* win) {
     int dx = win->sidebarDx;
     if (dx <= 0 && gSettings) {
@@ -2770,9 +2799,17 @@ SettingsApplyState GetSettingsApplyState() {
     s.disableAntiAlias = p->disableAntiAlias;
     s.chmUseFixedPageUI = p->chmUI.useFixedPageUI;
     s.markdownUseFixedPageUI = p->markdownUI.useFixedPageUI;
+    s.markdownPreserveLineBreaks = p->markdownUI.preserveLineBreaks;
     s.explorerQuickLook = p->explorerQuickLook;
     s.ebookLayout = EbookLayoutSnapshot();
     s.aiChatStyle = AIChatStyleSnapshot();
     s.thumbnailsType = str::Dup(p->thumbnailsType);
     return s;
+}
+
+void ToggleCaption(CustomCommand* cmd) {
+    bool show = GetCommandBoolArg(cmd, kCmdArgState, !gSettings->showCaption);
+    if (show != gSettings->showCaption) {
+        ToggleSettingsBool(&gSettings->showCaption);
+    }
 }

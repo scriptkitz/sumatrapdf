@@ -350,6 +350,9 @@ const CommandInfo gCommands[] = {
     {CmdQuickEditSettings, "CmdQuickEditSettings\0", StrL("Quick Edit Settings")},
     {CmdConfigureRestrictedUse, "CmdConfigureRestrictedUse\0", StrL("Configure Restricted Use...")},
     {CmdRunPDFScript, "CmdRunPDFScript\0", StrL("Run PDF Script...")},
+    {CmdToggleCaption, "CmdToggleCaption\0", StrL("Toggle Caption")},
+    {CmdAdjustBrightness, "CmdAdjustBrightness\0", StrL("Adjust Brightness...")},
+    {CmdAdjustContrast, "CmdAdjustContrast\0", StrL("Adjust Contrast...")},
 };
 const int gCommandsCount = dimofi(gCommands);
 
@@ -412,6 +415,7 @@ static const ArgSpec argSpecs[] = {
     // e.g. [CmdToggleFullscreen on] / [CmdToggleToolbar state=off]
     {CmdToggleContinuousView, kCmdArgState, CommandArg::Type::Bool},   // default
     {CmdToggleToolbar, kCmdArgState, CommandArg::Type::Bool},          // default
+    {CmdToggleCaption, kCmdArgState, CommandArg::Type::Bool},          // default
     {CmdToggleMenuBar, kCmdArgState, CommandArg::Type::Bool},          // default
     {CmdToggleFullscreen, kCmdArgState, CommandArg::Type::Bool},       // default
     {CmdTogglePresentationMode, kCmdArgState, CommandArg::Type::Bool}, // default

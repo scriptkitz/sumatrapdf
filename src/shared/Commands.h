@@ -339,13 +339,16 @@ enum {
     CmdQuickEditSettings = 533,
     CmdConfigureRestrictedUse = 534,
     CmdRunPDFScript = 535,
-    CmdBookmarkAdd = 536,
-    CmdBookmarkEdit = 537,
-    CmdBookmarkExport = 538,
-    CmdBookmarkImport = 539,
-    CmdToggleHideBezierCurves = 540,
+    CmdToggleCaption = 536,
+    CmdAdjustBrightness = 537,
+    CmdAdjustContrast = 538,
+    CmdBookmarkAdd = 539,
+    CmdBookmarkEdit = 540,
+    CmdBookmarkExport = 541,
+    CmdBookmarkImport = 542,
+    CmdToggleHideBezierCurves = 543,
 
-    CmdLast = 540,
+    CmdLast = 543,
     CmdFirstCustom = CmdLast + 100,
 
     // aliases, at the end to not mess ordering

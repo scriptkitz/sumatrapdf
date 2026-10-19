@@ -330,6 +330,15 @@ bool VirtCtrl::OnMouseWheel(VirtMouseEvent& ev) {
     return ev.didHandle;
 }
 
+bool VirtCtrl::OnPan(VirtMouseEvent& ev) {
+    if (!onPan.IsValid()) {
+        return false;
+    }
+    ev.didHandle = false;
+    onPan.Call(&ev);
+    return ev.didHandle;
+}
+
 bool VirtCtrl::OnDoubleClick(VirtMouseEvent& ev) {
     if (!onDoubleClick.IsValid()) {
         return false;
@@ -1151,6 +1160,73 @@ static bool BeginVirtPress(VirtRoot* root, VirtCtrl* target, Point ptWindow, Poi
     return BubbleMouse(target, ev, &VirtCtrl::OnMouseDown);
 }
 
+// a control under ptWindow, or one of its ancestors, scrolls with a touch pan
+static bool CanPanAt(VirtRoot* root, Point ptWindow) {
+    Point ptLocal;
+    for (VirtCtrl* w = VirtAtPoint(root, ptWindow, &ptLocal); w; w = w->parent) {
+        if (w->onPan.IsValid()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static Point GesturePtInWindow(HWND hwnd, POINTS pts) {
+    Point pt = HwndScreenToClient(hwnd, Point(pts.x, pts.y));
+    UnmirrorRtl(hwnd, pt);
+    return pt;
+}
+
+// Windows pans with one finger only in windows with scrollbars; our lists draw
+// their own, so without this a touch drag on them becomes a mouse drag
+static bool OnGestureNotify(VirtRoot* root, GESTURENOTIFYSTRUCT* gn, LRESULT& res) {
+    if (!CanPanAt(root, GesturePtInWindow(root->hwnd, gn->ptsLocation))) {
+        return false;
+    }
+    GESTURECONFIG gc{};
+    gc.dwID = GID_PAN;
+    gc.dwWant = GC_PAN | GC_PAN_WITH_SINGLE_FINGER_VERTICALLY | GC_PAN_WITH_GUTTER | GC_PAN_WITH_INERTIA;
+    gc.dwBlock = GC_PAN_WITH_SINGLE_FINGER_HORIZONTALLY;
+    SetGestureConfig(root->hwnd, 0, 1, &gc, sizeof(gc));
+    res = 0;
+    return true;
+}
+
+// a touch pan scrolls what is under where it started, the way the wheel does
+// (issue #6359)
+static bool OnGesture(VirtRoot* root, HGESTUREINFO hgi, LRESULT& res) {
+    GESTUREINFO gi{};
+    gi.cbSize = sizeof(gi);
+    if (!GetGestureInfo(hgi, &gi) || gi.dwID != GID_PAN) {
+        return false;
+    }
+    Point pt = GesturePtInWindow(root->hwnd, gi.ptsLocation);
+    if (gi.dwFlags & GF_BEGIN) {
+        root->panStart = pt;
+        root->panLastY = pt.y;
+        root->panActive = CanPanAt(root, pt);
+    }
+    if (!root->panActive) {
+        return false;
+    }
+    int dy = pt.y - root->panLastY;
+    root->panLastY = pt.y;
+    if (gi.dwFlags & GF_END) {
+        root->panActive = false;
+    }
+    Point ptLocal;
+    VirtCtrl* target = dy != 0 ? VirtAtPoint(root, root->panStart, &ptLocal) : nullptr;
+    if (target) {
+        VirtMouseEvent ev;
+        FillMouseEvent(ev, target, root->panStart, ptLocal, false, 0);
+        ev.panDy = dy;
+        BubbleMouse(target, ev, &VirtCtrl::OnPan);
+    }
+    CloseGestureInfoHandle(hgi);
+    res = 0;
+    return true;
+}
+
 bool VirtRoot::OnMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT& res) {
     if (len(tops) == 0) {
         return false;
@@ -1288,6 +1364,12 @@ bool VirtRoot::OnMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT& res) {
             return BubbleMouse(target, ev, &VirtCtrl::OnMouseWheel);
         }
 
+        case WM_GESTURENOTIFY:
+            return OnGestureNotify(this, (GESTURENOTIFYSTRUCT*)lp, res);
+
+        case WM_GESTURE:
+            return OnGesture(this, (HGESTUREINFO)lp, res);
+
         case WM_CONTEXTMENU: {
             POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
             if (pt.x == -1 && pt.y == -1) {
@@ -1363,6 +1445,7 @@ static Kind kindVirtCtrlScroll = "virtCtrlScroll";
 
 VirtScroll::VirtScroll() {
     onMouseWheel = MkMethod1<VirtScroll, VirtMouseEvent*, &VirtScroll::OnMouseWheel>(this);
+    onPan = MkMethod1<VirtScroll, VirtMouseEvent*, &VirtScroll::OnPan>(this);
 
     kind = kindVirtCtrlScroll;
     flags |= vwfClipChildren;
@@ -1459,6 +1542,13 @@ void VirtScroll::OnMouseWheel(VirtMouseEvent* ev) {
     }
     int lines = -(ev->wheelDelta * 3) / WHEEL_DELTA;
     if (ScrollBy(lines * lineDy)) {
+        ev->didHandle = true;
+    }
+}
+
+// the content follows the finger
+void VirtScroll::OnPan(VirtMouseEvent* ev) {
+    if (ScrollBy(-ev->panDy)) {
         ev->didHandle = true;
     }
 }
@@ -1700,6 +1790,7 @@ VirtListBox::VirtListBox() {
     onMouseUp = MkMethod1<VirtListBox, VirtMouseEvent*, &VirtListBox::OnMouseUp>(this);
     onMouseMove = MkMethod1<VirtListBox, VirtMouseEvent*, &VirtListBox::OnMouseMove>(this);
     onMouseWheel = MkMethod1<VirtListBox, VirtMouseEvent*, &VirtListBox::OnMouseWheel>(this);
+    onPan = MkMethod1<VirtListBox, VirtMouseEvent*, &VirtListBox::OnPan>(this);
     // onDoubleClick is the public item-activated Func0; wire the mouse path on VirtCtrl
     VirtCtrl::onDoubleClick = MkMethod1<VirtListBox, VirtMouseEvent*, &VirtListBox::OnDoubleClick>(this);
     onKeyDown = MkMethod1<VirtListBox, VirtKeyEvent*, &VirtListBox::OnKeyDown>(this);
@@ -2244,6 +2335,13 @@ void VirtListBox::OnMouseWheel(VirtMouseEvent* ev) {
     }
     int lines = -(ev->wheelDelta * 3) / WHEEL_DELTA;
     if (ScrollBy(lines * GetItemHeight())) {
+        ev->didHandle = true;
+    }
+}
+
+// the rows follow the finger
+void VirtListBox::OnPan(VirtMouseEvent* ev) {
+    if (ScrollBy(-ev->panDy)) {
         ev->didHandle = true;
     }
 }
@@ -3264,9 +3362,9 @@ VirtSlider::VirtSlider() {
     kind = kindVirtCtrlSlider;
     colorDefaults = gColsSlider;
     nColors = kColSliderCount;
-    flags |= vwfCapturesMouse;
-    flags &= ~vwfFocusable;
+    flags |= vwfCapturesMouse | vwfFocusable;
     cursor = CursorId::Hand;
+    onKeyDown = MkMethod1<VirtSlider, VirtKeyEvent*, &VirtSlider::OnKeyDown>(this);
     onMouseDown = MkMethod1<VirtSlider, VirtMouseEvent*, &VirtSlider::OnMouseDown>(this);
     onMouseMove = MkMethod1<VirtSlider, VirtMouseEvent*, &VirtSlider::OnMouseMove>(this);
     onMouseUp = MkMethod1<VirtSlider, VirtMouseEvent*, &VirtSlider::OnMouseUp>(this);
@@ -3381,6 +3479,11 @@ void VirtSlider::Paint(VirtPaintCtx& ctx) {
     bool hot = HasFlag(vwfHovered) || HasFlag(vwfPressed);
     Color thumb = GetColor(hot ? kColSliderThumbHover : kColSliderThumb);
     int d = r * 2;
+    if (HasFlag(vwfFocused)) {
+        // focus: a halo around the thumb
+        int h = std::max(r / 2, 3);
+        ctx.gfx->FillEllipse({cx - r - h, cy - r - h, d + 2 * h, d + 2 * h}, fillCol, 80);
+    }
     ctx.gfx->FillEllipse({cx - r, cy - r, d, d}, thumb);
 }
 
@@ -3421,6 +3524,50 @@ void VirtSlider::OnMouseWheel(VirtMouseEvent* ev) {
         onValueCommitted.Call();
     }
     ev->didHandle = true;
+}
+
+// arrows step by 1 (Ctrl: by a tenth of the range), PgUp / PgDn by a tenth,
+// Home / End go to the ends; left / right are mirrored in RTL
+void VirtSlider::OnKeyDown(VirtKeyEvent* ev) {
+    int bigStep = std::max((maxVal - minVal) / 10, 1);
+    int step = ev->isCtrl ? bigStep : 1;
+    HWND hwnd = GetHwnd();
+    if (hwnd && HwndIsRtl(hwnd) && (ev->vkey == VK_LEFT || ev->vkey == VK_RIGHT)) {
+        step = -step;
+    }
+    int v = value;
+    switch (ev->vkey) {
+        case VK_LEFT:
+        case VK_DOWN:
+            v -= step;
+            break;
+        case VK_RIGHT:
+        case VK_UP:
+            v += step;
+            break;
+        case VK_PRIOR:
+            v += bigStep;
+            break;
+        case VK_NEXT:
+            v -= bigStep;
+            break;
+        case VK_HOME:
+            v = minVal;
+            break;
+        case VK_END:
+            v = maxVal;
+            break;
+        default:
+            return;
+    }
+    ev->didHandle = true;
+    if (adjusting) {
+        return;
+    }
+    SetValue(v, true);
+    if (onValueCommitted.IsValid()) {
+        onValueCommitted.Call();
+    }
 }
 
 void VirtSlider::OnMouseEnter() {
@@ -3630,6 +3777,8 @@ static bool IsVirtMouseMsg(UINT msg) {
         case WM_MBUTTONDOWN:
         case WM_MBUTTONUP:
         case WM_MOUSEWHEEL:
+        case WM_GESTURENOTIFY:
+        case WM_GESTURE:
         case WM_CONTEXTMENU:
             return true;
     }
@@ -3660,7 +3809,8 @@ bool VirtTreeOnMessage(HWND hwnd, VirtRoot* root, UINT msg, WPARAM wp, LPARAM lp
     if (IsVirtMouseMsg(msg)) {
         // WM_CONTEXTMENU and the wheel come in screen coordinates, which
         // VirtRoot::OnMessage converts itself
-        bool inClientCoords = (msg != WM_CONTEXTMENU) && (msg != WM_MOUSEWHEEL);
+        bool inClientCoords =
+            (msg != WM_CONTEXTMENU) && (msg != WM_MOUSEWHEEL) && (msg != WM_GESTURE) && (msg != WM_GESTURENOTIFY);
         LPARAM lp2 = inClientCoords ? UnmirrorRtlLparam(hwnd, lp) : lp;
         return root->OnMessage(msg, wp, lp2, res);
     }

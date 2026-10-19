@@ -61,6 +61,10 @@ relative to `ext/mupdf`, so `-p1` from inside that directory.
 | `0058-unwrap-display-list-image` | `fz_unwrap_display_list_image`: the one raster an SVG draws, so Save Image / copy keep its bytes and resolution (#6330) |
 | `0059-svg-text-path` | SVG `<textPath>` places glyphs along the referenced path; such text used to pile up at the origin (#6332) |
 | `0060-pdf-update-object-keeps-stream` | `pdf_update_object` carries a stream over when the entry moves to a new xref section; a stream added in the session lost its data on a `garbage=3` save |
+| `0061-stext-tall-font-glyph-ink` | a font box taller than 3em (Cambria Math bbox used as ascent/descent) takes glyph ink for the vertical selection edges (#6348) |
+| `0062-svg-rgba-font-face` | SVG `rgba()` colors and `@font-face` data URI fonts (WOFF/TTF) in `<style>`; such text drew black in Times (#6339) |
+| `0063-epub-fixed-layout-page` | an EPUB chapter whose viewport gives width and height is one page of exactly that size, without the `@page` margin; such books had blank pages between chapters (#1293) |
+| `0064-html-css-transform` | CSS `transform` / `transform-origin` on blocks and `position:absolute` on inline boxes; InDesign fixed-layout text (`scale(0.05)` around per-word positioned spans) ran off the page (#1293) |
 
 That is the whole list: `ext/mupdf` is byte-for-byte `1.28.5` plus these
 patches, and nothing else.

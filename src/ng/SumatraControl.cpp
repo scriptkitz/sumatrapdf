@@ -90,6 +90,7 @@
 #include "gui/PlatformFont.h"
 #endif
 #include "SumatraDialogs.h"
+#include "PageGridDialogCommon.h"
 #include "DocumentProperties.h"
 #include "NavFilesInFolder.h"
 #include "EngineAll.h"
@@ -117,6 +118,7 @@ extern "C" {
 #include "gui/NativeCursors.h"
 #include "SumatraControl.h"
 #include "SumatraControlCommon.h"
+#include "BrightnessContrastDialogCommon.h"
 
 #include "SumatraLog.h"
 
@@ -821,6 +823,9 @@ enum class ControlCmd : u16 {
     TestSaveFileName = 134,
     // places the signature being placed at a canvas point (pixels), as a click does
     TestPlaceSignature = 135,
+    // [brightness, contrast] applied to the current file as the Brightness /
+    // Contrast dialog's OK does; returns the current values
+    TestPageAdjust = 138,
 };
 
 static_assert((u16)ControlCmd::Quit == (u16)ControlFrameCmd::Quit);
@@ -2105,6 +2110,20 @@ static void ExecuteControlRequest(ControlRequest* req) {
             break;
         }
 
+        case ControlCmd::TestPageAdjust: {
+            MainWindow* win = FirstWindow();
+            i32 brightness = 0;
+            i32 contrast = 0;
+            bool set = IntArg(req, 0, brightness) && IntArg(req, 1, contrast);
+            TempStr res = PageAdjustTestTemp(win ? win->CurrentTab() : nullptr, set, brightness, contrast);
+            if (len(res) == 0) {
+                AppendError(req, StrL("TestPageAdjust needs an open fixed-page document"));
+                break;
+            }
+            AppendTestResult(req, 0, res);
+            break;
+        }
+
         case ControlCmd::TestSaveFileName: {
 #if OS_WIN
             SetTestSaveFileName(StringArg(req, 0));
@@ -2448,6 +2467,38 @@ static void ExecuteControlRequest(ControlRequest* req) {
                 SetShowPageGrid(on != 0);
             } else if (str::EqI(action, StrL("reset-grid"))) {
                 ResetPageGridToDefaults();
+            } else if (str::EqI(action, StrL("set-slant"))) {
+                i32 deg = (int)kPageGridDefaultSlant;
+                IntArg(req, 1, deg);
+                if (PageGrid* pg = PageGridPrefs()) {
+                    pg->slant = PageGridClampSlant((float)deg);
+                }
+                RedrawPageGridWindows();
+            } else if (str::EqI(action, StrL("probe-grid"))) {
+                MainWindow* win = FirstWindow();
+                AppendTestResult(req, 0, PageGridProbeTemp(win ? win->AsFixed() : nullptr));
+                break;
+            } else if (str::EqI(action, StrL("drag-grid"))) {
+                Str phase = StringArg(req, 1);
+                i32 x = 0;
+                i32 y = 0;
+                bool hasPt = IntArg(req, 2, x) && IntArg(req, 3, y);
+                MainWindow* win = FirstWindow();
+                DisplayModel* dm = win ? win->AsFixed() : nullptr;
+                if (str::EqI(phase, StrL("down"))) {
+                    AppendTestResult(req, 0, fmt("hit=%d", PageGridDragStart(dm, x, y) ? 1 : 0));
+                    break;
+                }
+                if (str::EqI(phase, StrL("move"))) {
+                    PageGridDragMove(dm, x, y);
+                } else if (str::EqI(phase, StrL("up"))) {
+                    if (hasPt) {
+                        PageGridDragMove(dm, x, y);
+                    }
+                    PageGridDragEnd();
+                } else if (str::EqI(phase, StrL("cancel"))) {
+                    PageGridDragCancel();
+                }
             } else if (str::EqI(action, StrL("grid-marks"))) {
                 MainWindow* win = FirstWindow();
                 AppendTestResult(req, 0, fmt("marks=%d", PageGridMarkPixels(win)));
@@ -2632,7 +2683,8 @@ static void ExecuteControlRequest(ControlRequest* req) {
             }
             Rect frame = win->frameRc;
             Rect canvas = win->canvasRc;
-            int menuDy = (win->isMenuBarVisible && !AppShellNativeMenu()) ? kMenuBarDy : 0;
+            bool captionHidden = win->tabsInTitlebar && !gSettings->showCaption && !win->captionOverlayShown;
+            int menuDy = (win->isMenuBarVisible && !AppShellNativeMenu() && !captionHidden) ? kMenuBarDy : 0;
             int tabsDy = TabsAreVisible(win) ? kTabBarDy : 0;
             int toolbarDy = ToolbarDy(win);
             int sidebarDx = (win->uiState.tocVisible || win->uiState.favVisible) ? win->sidebarDx : 0;

@@ -33,6 +33,8 @@ import { testit as cmykImageSave } from "./cmyk-image-save.ts";
 import { testit as issue6214 } from "./issue-6214.ts";
 import { testit as issue1809 } from "./issue-1809.ts";
 import { testit as issue4398 } from "./issue-4398.ts";
+import { testit as issue6346 } from "./issue-6346.ts";
+import { testit as issue6348 } from "./issue-6348.ts";
 import { testit as issue6039 } from "./issue-6039.ts";
 import { testit as issue5846 } from "./issue-5846.ts";
 import { testit as issue5941 } from "./issue-5941.ts";
@@ -157,6 +159,13 @@ import { testit as issue6265 } from "./issue-6265.ts";
 import { testit as issue6266 } from "./issue-6266.ts";
 import { testit as issue6330 } from "./issue-6330.ts";
 import { testit as issue6332 } from "./issue-6332.ts";
+import { testit as issue6339 } from "./issue-6339.ts";
+import { testit as issue1293 } from "./issue-1293.ts";
+import { testit as issue4788 } from "./issue-4788.ts";
+import { testit as issue6359 } from "./issue-6359.ts";
+import { testit as issue6360 } from "./issue-6360.ts";
+import { testit as issue6361 } from "./issue-6361.ts";
+import { testit as issue6362 } from "./issue-6362.ts";
 import { testit as issue6276 } from "./issue-6276.ts";
 import { testit as issue6279 } from "./issue-6279.ts";
 import { testit as issue6280 } from "./issue-6280.ts";
@@ -333,6 +342,9 @@ import { testit as issue6107 } from "./issue-6107.ts";
 
 import { testit as issue5968 } from "./issue-5968.ts";
 import { testit as issue5978 } from "./issue-5978.ts";
+import { testit as issue6352 } from "./issue-6352.ts";
+import { testit as issue6354 } from "./issue-6354.ts";
+import { testit as issue6355 } from "./issue-6355.ts";
 import { testit as issue2423 } from "./issue-2423.ts";
 import { testit as issue6167 } from "./issue-6167.ts";
 import { testit as issue6168 } from "./issue-6168.ts";
@@ -371,6 +383,7 @@ import { testit as issue4662 } from "./issue-4662.ts";
 import { testit as issue6013 } from "./issue-6013.ts";
 import { testit as issue6018 } from "./issue-6018.ts";
 import { testit as selectionToolbarStays } from "./selection-toolbar-stays.ts";
+import { testit as keyboardSelectYankEmpty } from "./keyboard-select-yank-empty.ts";
 import { testit as selectionToolbarMove } from "./selection-toolbar-move.ts";
 import { testit as selectionFontBbox } from "./selection-font-bbox.ts";
 import { testit as issue4839 } from "./issue-4839.ts";
@@ -435,6 +448,12 @@ export const tests: NamedTest[] = [
   // first: it drives the home page, whose thumbnail selection follows the
   // mouse, so it is the one test that cares what the machine was doing before
   ["issue-5978", issue5978],
+  ["issue-6352", issue6352],
+  ["issue-6354", issue6354],
+  ["issue-6355", issue6355],
+  ["line-annotation-placement", lineAnnotationPlacement],
+  ["polyline-annotation-placement", polylineAnnotationPlacement],
+  ["shape-annotation-placement", shapeAnnotationPlacement],
   ["epub-restyle-fit-content", epubRestyleFitContent],
   ["annot-text-popup-reload", annotTextPopupReload],
   ["read-aloud-lazy-chapters", readAloudLazyChapters],
@@ -453,10 +472,7 @@ export const tests: NamedTest[] = [
   ["free-text-edit-toolbar", freeTextEditToolbar],
   ["free-text-edit-zoom", freeTextEditZoom],
   ["pdf-edit-toolbar-interaction", pdfEditToolbarInteraction],
-  ["polyline-annotation-placement", polylineAnnotationPlacement],
-  ["line-annotation-placement", lineAnnotationPlacement],
   ["sidebar-thumbnails", sidebarThumbnails],
-  ["shape-annotation-placement", shapeAnnotationPlacement],
   ["issue-6144", issue6144],
   ["sidebar-thumbnails-wheel", sidebarThumbnailsWheel],
   ["issue-6305", issue6305],
@@ -555,6 +571,8 @@ export const tests: NamedTest[] = [
   ["issue-5944", issue5944],
   ["issue-6039", issue6039],
   ["issue-4398", issue4398],
+  ["issue-6346", issue6346],
+  ["issue-6348", issue6348],
   ["issue-5964", issue5964],
   ["issue-6013", issue6013],
   ["issue-5989", issue5989],
@@ -694,6 +712,13 @@ export const tests: NamedTest[] = [
   ["issue-6266", issue6266],
   ["issue-6330", issue6330],
   ["issue-6332", issue6332],
+  ["issue-6339", issue6339],
+  ["issue-1293", issue1293],
+  ["issue-4788", issue4788],
+  ["issue-6359", issue6359],
+  ["issue-6360", issue6360],
+  ["issue-6361", issue6361],
+  ["issue-6362", issue6362],
   ["issue-6280", issue6280],
   ["issue-6322", issue6322],
   ["issue-6324", issue6324],
@@ -799,6 +824,7 @@ export const tests: NamedTest[] = [
   ["issue-4662", issue4662],
   ["issue-6018", issue6018],
   ["selection-toolbar-stays", selectionToolbarStays],
+  ["keyboard-select-yank-empty", keyboardSelectYankEmpty],
   ["selection-font-bbox", selectionFontBbox],
   ["issue-4839", issue4839],
   ["issue-6023", issue6023],

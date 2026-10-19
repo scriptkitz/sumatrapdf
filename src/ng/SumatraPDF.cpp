@@ -364,7 +364,8 @@ void ApplyChangedSettingsAndRelayout(const SettingsApplyState& before) {
             }
         }
     }
-    if (before.markdownUseFixedPageUI != p->markdownUI.useFixedPageUI) {
+    if (before.markdownUseFixedPageUI != p->markdownUI.useFixedPageUI ||
+        before.markdownPreserveLineBreaks != p->markdownUI.preserveLineBreaks) {
         for (MainWindow* w : gWindows) {
             if (w->CurrentTab() && w->CurrentTab()->AsMarkdown()) {
                 ReloadDocument(w, false);
@@ -596,8 +597,9 @@ void ForgetFileFromFrequentlyRead(MainWindow* win, Str filePath) {
 
 int ScrollbarModeFromPrefs() {
     int idx = SeqStrIndexIS(gScrollbarModeNames, gSettings->scrollbars);
-    if (idx < 0) {
-        idx = kScrollbarWindows;
+    // ng has no native Windows scrollbar; a saved "windows" value is smart
+    if (idx < 0 || idx == kScrollbarWindows) {
+        idx = kScrollbarSmart;
     }
     return idx;
 }
@@ -982,6 +984,8 @@ static float EbookLayoutAspectForLoad(MainWindow* win, Str path);
 // True while the command-line file loop is loading, so -view / -zoom size
 // that ebook and not a session restored just before it.
 static bool gApplyCliViewToEbookLayout = false;
+// another instance owns the saved session, so we don't restore it (#6350)
+static bool gOtherInstanceRunning = false;
 
 static DocController* CreateControllerForFile(MainWindow* win, Str path, PasswordUI* pwdUI) {
     auto timeStart = TimeGet();
@@ -1637,6 +1641,7 @@ static MainWindow* LoadDocumentFinish(MainWindow* win, Str fullPath, DocControll
             dm->SetUniformPageWidth(fs->uniformPageWidth);
             dm->SetTrimEmptyMargins(fs->trimEmptyMargins);
             dm->SetFreePan(fs->freePan);
+            dm->SetPageAdjust(fs->brightness, fs->contrast);
             // migrate in place only: a SaveSettings() here would rebuild
             // gInitialSessionData and free a TabState a restored tab borrows
             MigrateFileStatePagePos(ctrl, fs);
@@ -4600,13 +4605,9 @@ bool FrameOnChar(MainWindow* win, u32 key, bool isShift) {
         key = key - 'A' + 'a';
     }
     switch (key) {
-        // per https://en.wikipedia.org/wiki/Keyboard_layout
-        // almost all keyboard layouts allow to press either
-        // '+' or '=' unshifted (and one of them is also often
-        // close to '-'); the other two alternatives are for
-        // the major exception: the two Swiss layouts
+        // '+' unshifted, or the two Swiss-layout alternatives.
+        // '=' opens the settings palette instead.
         case '+':
-        case '=':
         case 0xE0:
         case 0xE4:
             ExecuteCmd(win, CmdZoomIn);
@@ -5285,6 +5286,10 @@ void ExecuteCmd(MainWindow* win, int cmdId) {
             ReadingBarToggleInvert(win);
             break;
 
+        case CmdToggleCaption:
+            ToggleCaption(cmd);
+            break;
+
         case CmdToggleToolbar:
             if (GetCommandArg(cmd, kCmdArgState)) {
                 // explicit state: on -> show (pinned), off -> hide
@@ -5931,6 +5936,11 @@ void ExecuteCmd(MainWindow* win, int cmdId) {
             ShowChangeBackgroundColorDialog(win);
             break;
 
+        case CmdAdjustBrightness:
+        case CmdAdjustContrast:
+            ShowBrightnessContrastDialog(win);
+            break;
+
         case CmdSetTabColor:
             ShowSetTabColorDialog(win, tab);
             break;
@@ -6551,6 +6561,7 @@ Retry:
 static bool ForwardToExistingInstance(Flags& flags, HANDLE* hMutex) {
     bool openInNewWindow = false;
     HWND existingInstanceHwnd = FindExistingSumatraProcessHwnd(hMutex, &openInNewWindow);
+    gOtherInstanceRunning = existingInstanceHwnd != nullptr;
 
     HWND existingHwnd = nullptr;
     if (flags.printDialog || flags.configureRestrictedUse || gForTesting) {
@@ -7057,7 +7068,8 @@ int GpuiMain(int argc, char** argv) {
     gIsStartup = true;
 #endif
     bool restoredSession = false;
-    if (!gFlags->configureRestrictedUse && (len(gFlags->fileNames) == 0 || SettingsUseTabs())) {
+    bool canRestore = !gFlags->configureRestrictedUse && !gOtherInstanceRunning;
+    if (canRestore && (len(gFlags->fileNames) == 0 || SettingsUseTabs())) {
         restoredSession = RestoreSession(win);
         // the session may have opened more windows; the command line goes into
         // the first one, as orig does
@@ -7121,6 +7133,7 @@ int GpuiMain(int argc, char** argv) {
     }
     // call this once it's clear whether Perm::SavePreferences has been granted
     RegisterSettingsForFileChanges();
+    RegenerateMissingThumbnails();
     // -forward-search <source file> <line>: jump to the matching place in the
     // PDF and flash the mark there (orig does this in LoadOnStartup)
     if (gFlags->forwardSearchOrigin && gFlags->forwardSearchLine && win->AsFixed() && win->AsFixed()->pdfSync) {

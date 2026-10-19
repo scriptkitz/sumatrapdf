@@ -2129,6 +2129,12 @@ void UndoRedoInTab(WindowTab* tab, bool redo) {
     }
     // the wrapper deletes above mark the document modified; the journal knows better
     EngineMupdfRefreshModifiedState(engine);
+    // mupdf journals outline changes too, so undo may have dropped a bookmark
+    // we added. Our tree isn't journal-aware, so rebuild it from the PDF.
+    if (TocTree* stale = EngineMupdfDropOutlineCache(engine)) {
+        ReloadTocTree(tab); // re-points tab->currToc before we free the old tree
+        DestroyTocTree(stale);
+    }
     DeleteOldSelectionInfo(win, true);
     RefreshAnnotationLists(tab);
     NotifyAnnotationsChanged(tab);

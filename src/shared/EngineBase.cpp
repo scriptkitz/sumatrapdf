@@ -293,7 +293,7 @@ bool IPageElement::Is(Kind expectedKind) {
 // bookmark/TOC label): drop soft hyphens and turn control chars / line
 // separators into spaces, so they don't render as a stray hyphen or as
 // boxes (#2647).
-static TempStr CleanupTreeViewControlStringTemp(Str s) {
+TempStr CleanupTreeViewControlStringTemp(Str s) {
     if (len(s) == 0) {
         return {};
     }

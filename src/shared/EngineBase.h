@@ -371,6 +371,13 @@ struct TocItem {
 TocItem* AllocTocItem(Arena* arena, Str title, int pageNo);
 void FreeTocItemRec(Arena* arena, TocItem* item);
 
+// Sanitize a string for display in a single-line tree-view control (e.g. a
+// bookmark/TOC label): drop soft hyphens and turn control chars / line
+// separators into spaces, so they don't render as a stray hyphen or as
+// boxes (#2647). AllocTocItem() applies it to every title; callers that
+// rewrite a title in place (EngineMupdf's bookmark editing) need it too.
+TempStr CleanupTreeViewControlStringTemp(Str s);
+
 struct TocTree : TreeModel {
     TocItem* root = nullptr;
     Arena* arena = nullptr;

@@ -784,7 +784,12 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
         bool onImage = ctx.cursorOnImage || ctx.engineKind == kindEngineImage;
         return onImage ? CommandVisibility::Show : CommandVisibility::Hide;
     }
-    if ((cmdId == CmdToggleBookmarks) || (cmdId == CmdToggleTableOfContents)) {
+    // CmdToggleBookmarks is always offered: the panel shows an empty list for
+    // a document with no bookmarks, which is where the user adds the first one
+    if (cmdId == CmdToggleBookmarks) {
+        return CommandVisibility::Show;
+    }
+    if (cmdId == CmdToggleTableOfContents) {
         return ctx.hasToc ? CommandVisibility::Show : CommandVisibility::Hide;
     }
 

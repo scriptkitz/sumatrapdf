@@ -40,6 +40,11 @@
 #include "TableOfContents.h"
 #include "TableOfContentsCommon.h"
 #include "MenuDefs.h"
+#include "SumatraDialogs.h"
+#include "SumatraConfig.h"
+#include "Notifications.h"
+#include "AppHelpersCommon.h"
+#include "shared/PdfToolsCommon.h"
 
 // set tooltip for this item but only if the text isn't fully shown
 // TODO: I might have lost something in translation
@@ -472,6 +477,296 @@ static void TocCollapseSameLevel(TreeView* tv, TreeItem ti) {
     tv->ResumeRedraw();
 }
 
+// --- the bookmark dialog: one window that names a bookmark and says which page
+// it goes to. The same window creates a bookmark and edits an existing one -
+// those two fields are all a bookmark has. Modelled on AddFavoriteDialog.cpp
+// and GoToPageDialog.cpp: same WindowBase + VBox + rows-of-label-and-Edit
+// shape, same single-instance window, so a second request retargets the open
+// one instead of stacking dialogs.
+//
+//   Name:  Chapter 2
+//   Page:  12                       [Cancel] [Save]
+constexpr int kBookmarkInputDlgDx = 400;
+constexpr int kBookmarkNameEditChars = 30;
+// an entry's page can only be set to a page of this document, so a short field
+// is enough; the label form ("iv") fits too
+constexpr int kBookmarkPageEditChars = 10;
+
+enum class BookmarkEditKind {
+    Add,  // create a bookmark under `parent` (null = top level)
+    Edit, // rename and/or retarget `item`
+};
+
+struct BookmarkEditArgs {
+    BookmarkEditKind kind = BookmarkEditKind::Add;
+    MainWindow* win = nullptr;
+    TocItem* parent = nullptr; // Add: where the new bookmark goes
+    TocItem* item = nullptr;   // Edit: the bookmark to change
+};
+
+struct BookmarkInputWnd : WindowBase {
+    ~BookmarkInputWnd() override;
+
+    BookmarkEditArgs args;
+    Str windowTitle;
+    Str confirmText;
+    Str name;
+    Str page;
+
+    Edit* editName = nullptr;
+    Edit* editPage = nullptr;
+    VirtButton* btnCancel = nullptr;
+    VirtButton* btnOk = nullptr;
+
+    bool Create(MainWindow* win, Str windowTitleIn, Str nameIn, Str pageIn, Str confirmIn);
+    void SetTarget(Str windowTitleIn, Str nameIn, Str pageIn, Str confirmIn);
+    Edit* AddField(VBox* vbox, Str label, Str text, int idealChars);
+
+    void OnCancel(VirtMouseEvent* ev = nullptr);
+    void OnOk(VirtMouseEvent* ev = nullptr);
+};
+
+static BookmarkInputWnd* gBookmarkInputWnd = nullptr;
+
+BookmarkInputWnd::~BookmarkInputWnd() {
+    str::Free(windowTitle);
+    str::Free(confirmText);
+    str::Free(name);
+    str::Free(page);
+}
+
+static void ClearBookmarkInputWnd() {
+    gBookmarkInputWnd = nullptr;
+}
+
+void BookmarkInputWnd::SetTarget(Str windowTitleIn, Str nameIn, Str pageIn, Str confirmIn) {
+    str::ReplaceWithCopy(&windowTitle, windowTitleIn);
+    str::ReplaceWithCopy(&name, nameIn);
+    str::ReplaceWithCopy(&page, pageIn);
+    str::ReplaceWithCopy(&confirmText, confirmIn);
+    if (editName) {
+        editName->SetText(name);
+    }
+    if (editPage) {
+        editPage->SetText(page);
+    }
+    if (btnOk) {
+        btnOk->SetText(confirmText);
+    }
+    if (hwnd) {
+        HwndSetText(hwnd, windowTitle);
+    }
+}
+
+void BookmarkInputWnd::OnCancel(VirtMouseEvent*) {
+    ScheduleDelete();
+}
+
+// Rebuild the tree after the model changed under it. SetTreeModel() is a full
+// repopulate, which is also the only way a new row under a collapsed branch
+// becomes visible: the tree view fills children lazily.
+static void RefreshTocAfterEdit(MainWindow* win) {
+    WindowTab* tab = win ? win->CurrentTab() : nullptr;
+    if (!win || !win->tocLoaded || !win->tocTreeView || !tab || !tab->currToc) {
+        return;
+    }
+    TreeItem sel = win->tocTreeView->GetSelection();
+    win->tocTreeView->SetTreeModel(tab->currToc);
+    if (sel != TreeModel::kNullItem) {
+        win->tocTreeView->SelectItem(sel);
+    }
+}
+
+// A typed page is a number or, when the document defines page labels, a label
+// like "iv" - the same parsing the Go To Page box does. Returns a 1-based page
+// number, or 0 when it names no page of this document.
+static int PageNoFromInput(MainWindow* win, Str text) {
+    int page = win->ctrl->GetPageByLabel(text);
+    if (!win->ctrl->ValidPageNo(page)) {
+        return 0;
+    }
+    return page;
+}
+
+void BookmarkInputWnd::OnOk(VirtMouseEvent*) {
+    TempStr nameText = editName ? editName->GetTextTemp() : Str{};
+    str::TrimWSInPlace(nameText, str::TrimOpt::Both);
+    TempStr pageText = editPage ? editPage->GetTextTemp() : Str{};
+    str::TrimWSInPlace(pageText, str::TrimOpt::Both);
+
+    // read everything we need before ScheduleDelete() frees us
+    BookmarkEditArgs a = args;
+    MainWindow* win = args.win;
+    Str name = Str(nameText);
+
+    int pageNo = PageNoFromInput(win, Str(pageText));
+    if (pageNo == 0) {
+        // stay up so the typo can be fixed
+        ShowWarningNotification(win, Tr("Not a valid page number"), kNotifDefaultTimeOut);
+        return;
+    }
+    EngineBase* engine = win->ctrl->AsFixed()->GetEngine();
+
+    if (a.kind == BookmarkEditKind::Add) {
+        // a nameless entry would draw as an empty row, so fall back to the page
+        Str useName = len(name) > 0 ? name : win->ctrl->GetPageLabeTemp(pageNo);
+        if (!EngineMupdfAddOutlineItem(engine, a.parent, useName, pageNo)) {
+            ShowWarningNotification(win, Tr("Couldn't add the bookmark"), kNotifDefaultTimeOut);
+            return;
+        }
+        ScheduleDelete();
+        RefreshTocAfterEdit(win);
+        return;
+    }
+
+    if (!EngineMupdfUpdateOutlineItem(engine, a.item, name, pageNo)) {
+        ShowWarningNotification(win, Tr("Couldn't change the bookmark"), kNotifDefaultTimeOut);
+        return;
+    }
+    ScheduleDelete();
+    // a rename can change the row's width, so repopulate instead of touching
+    // one node
+    RefreshTocAfterEdit(win);
+}
+
+static void OnBookmarkInputClose(WindowBase::CloseEvent* /*ev*/) {
+    if (gBookmarkInputWnd) {
+        gBookmarkInputWnd->OnCancel();
+    }
+}
+
+static void OnBookmarkInputDestroy(WindowBase::DestroyEvent* /*ev*/) {
+    if (gBookmarkInputWnd) {
+        gBookmarkInputWnd->ScheduleDelete();
+    }
+}
+
+// one "Label: [edit]" row, the label muted and the field stretched
+Edit* BookmarkInputWnd::AddField(VBox* vbox, Str label, Str text, int idealChars) {
+    HBox* row = NewDlgRow();
+    row->AddChild(
+        NewDlgLabel(label, DlgUiFont(kToolDlgTextFontPx), ThemeWindowTextDisabledColor(), kToolDlgLineDy, true));
+
+    Edit::CreateArgs editArgs;
+    editArgs.parent = hwnd;
+    editArgs.font = DlgUiFont(kToolDlgQueryFontPx);
+    editArgs.withBorder = false;
+    editArgs.selectAllOnFocus = true;
+    editArgs.isRtl = IsUIRtl();
+    editArgs.text = text;
+    editArgs.idealWidthChars = idealChars;
+    auto* e = new Edit();
+    e->SetColors(ThemeWindowTextColor(), ThemeWindowControlBackgroundColor());
+    e->Create(editArgs);
+    row->AddChild(e, 1);
+
+    vbox->AddChild(new Padding(row, DpiScaledInsets(0, kToolDlgPadDx)));
+    return e;
+}
+
+bool BookmarkInputWnd::Create(MainWindow* win, Str windowTitleIn, Str nameIn, Str pageIn, Str confirmIn) {
+    SetTarget(windowTitleIn, nameIn, pageIn, confirmIn);
+
+    PlatformFont* fontText = DlgUiFont(kToolDlgTextFontPx);
+    SetFont(fontText);
+    bool isRtl = IsUIRtl();
+    {
+        CreateCustomArgs args;
+        args.owner = win ? win->hwndFrame : nullptr;
+        args.title = windowTitle;
+        args.visible = false;
+        args.style = WS_POPUPWINDOW | WS_CAPTION;
+        args.font = fontText;
+        args.isRtl = isRtl;
+        args.bgColor = ThemeWindowControlBackgroundColor();
+        args.icon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(GetAppIconID()));
+        CreateCustom(args);
+    }
+    if (!hwnd) {
+        return false;
+    }
+    SetColors(ThemeWindowTextColor(), ThemeWindowControlBackgroundColor());
+
+    auto* vbox = new VBox();
+    vbox->alignCross = CrossAxisAlign::Stretch;
+    editName = AddField(vbox, Tr("Name:"), name, kBookmarkNameEditChars);
+    editPage = AddField(vbox, Tr("Page:"), page, kBookmarkPageEditChars);
+
+    btnCancel = NewDlgButton(hwnd, Tr("Cancel"), fontText, DlgButtonStyle::Outline, false);
+    btnCancel->onClick = MkMethod1<BookmarkInputWnd, VirtMouseEvent*, &BookmarkInputWnd::OnCancel>(this);
+    btnOk = NewDlgButton(hwnd, confirmText, fontText, DlgButtonStyle::Filled, true);
+    btnOk->onClick = MkMethod1<BookmarkInputWnd, VirtMouseEvent*, &BookmarkInputWnd::OnOk>(this);
+    vbox->AddChild(NewDlgFooter(btnCancel, btnOk));
+    layout = vbox;
+
+    LayoutAndSizeToContent(layout, DpiScale(kBookmarkInputDlgDx), 0, hwnd);
+    DoLayout(HwndClientRect(hwnd).Size());
+    HwndCenterDialog(hwnd, win ? win->hwndFrame : nullptr);
+    UpdateTheme();
+
+    SetIsVisible(true);
+    EditSelectAll(editName);
+    EditSetFocus(editName);
+    return true;
+}
+
+static void ShowBookmarkInputDialog(MainWindow* win, BookmarkEditArgs args, Str windowTitle, Str name, Str page,
+                                    Str confirmText) {
+    if (gBookmarkInputWnd) {
+        gBookmarkInputWnd->args = args;
+        gBookmarkInputWnd->SetTarget(windowTitle, name, page, confirmText);
+        if (gBookmarkInputWnd->hwnd) {
+            gBookmarkInputWnd->DoLayout(HwndClientRect(gBookmarkInputWnd->hwnd).Size());
+            HwndInvalidate(gBookmarkInputWnd->hwnd);
+        }
+        HwndSetFocus(gBookmarkInputWnd->hwnd);
+        EditSelectAll(gBookmarkInputWnd->editName);
+        EditSetFocus(gBookmarkInputWnd->editName);
+        return;
+    }
+    auto* wnd = new BookmarkInputWnd();
+    wnd->args = args;
+    wnd->closeOnEsc = true;
+    wnd->onBeforeDelete = MkFunc0Void(ClearBookmarkInputWnd);
+    wnd->onClose = MkFunc1Void<WindowBase::CloseEvent*>(OnBookmarkInputClose);
+    wnd->onDestroy = MkFunc1Void<WindowBase::DestroyEvent*>(OnBookmarkInputDestroy);
+    wnd->SetFont(GetAppFont());
+    if (!wnd->Create(win, windowTitle, name, page, confirmText)) {
+        delete wnd;
+        return;
+    }
+    gBookmarkInputWnd = wnd;
+    RunModalWindow(wnd->hwnd, win ? win->hwndFrame : nullptr);
+}
+
+// New bookmark under `parent` (null = top level), defaulting to the page
+// currently on screen.
+static void AddBookmarkFromToc(MainWindow* win, TocItem* parent) {
+    BookmarkEditArgs args;
+    args.kind = BookmarkEditKind::Add;
+    args.win = win;
+    args.parent = parent;
+    int pageNo = win->currPageNo;
+    TempStr pageLabel = win->ctrl->GetPageLabeTemp(pageNo);
+    ShowBookmarkInputDialog(win, args, Tr("New Bookmark"), pageLabel, fmt("%d", pageNo), Tr("Add Bookmark"));
+}
+
+// Rename a bookmark and/or point it somewhere else: one dialog, as those are
+// the two things a bookmark has.
+static void EditBookmarkFromToc(MainWindow* win, TocItem* item) {
+    if (!item) {
+        return;
+    }
+    BookmarkEditArgs args;
+    args.kind = BookmarkEditKind::Edit;
+    args.win = win;
+    args.item = item;
+    // an entry whose destination didn't resolve has no page; offer the current
+    // one rather than an empty box
+    int pageNo = item->pageNo > 0 ? item->pageNo : win->currPageNo;
+    ShowBookmarkInputDialog(win, args, Tr("Edit Bookmark"), item->title, fmt("%d", pageNo), Tr("Save"));
+}
+
 static void TocContextMenu(ContextMenuEvent* ev) {
     MainWindow* win = FindMainWindowByHwnd(ev->w->hwnd);
     Str filePath = win->ctrl->GetFilePath();
@@ -562,6 +857,28 @@ static void TocContextMenu(ContextMenuEvent* ev) {
         MenuRemove(popup, CmdFavoriteAdd);
         MenuRemove(popup, CmdFavoriteDel);
     }
+
+    // bookmark editing. Only a PDF whose bookmarks come from /Outlines can be
+    // written back; a heading-generated tree and an epub cannot. An attachment
+    // is not an outline entry either, so it gets no edit items.
+    EngineBase* engine = nullptr;
+    if (tab) {
+        DisplayModel* dm = tab->AsFixed();
+        engine = dm ? dm->GetEngine() : nullptr;
+    }
+    bool canEditOutline = engine && EngineMupdfCanEditOutline(engine);
+    bool isAttachment = dest && destKind == kindDestinationAttachment;
+    if (!canEditOutline || isAttachment) {
+        MenuRemove(popup, CmdBookmarkAdd);
+        MenuRemove(popup, CmdBookmarkEdit);
+    } else if (dti) {
+        // on an entry: add a child under it, or change the entry itself
+        MenuSetText(popup, CmdBookmarkAdd, Tr("New Sub-bookmark..."));
+    } else {
+        // on empty space: add a top-level entry; there is nothing to edit
+        MenuRemove(popup, CmdBookmarkEdit);
+    }
+
     RemoveBadMenuSeparators(popup);
     MarkMenuOwnerDraw(popup);
     uint flags = TPM_RETURNCMD | TPM_RIGHTBUTTON;
@@ -609,7 +926,13 @@ static void TocContextMenu(ContextMenuEvent* ev) {
         }
         case CmdOpenAttachment: {
             OpenAttachment(tab, fileName, attachmentNo);
-        }
+        } break;
+        case CmdBookmarkAdd: {
+            AddBookmarkFromToc(win, dti);
+        } break;
+        case CmdBookmarkEdit: {
+            EditBookmarkFromToc(win, dti);
+        } break;
     }
 }
 
@@ -636,10 +959,13 @@ void LoadTocTree(MainWindow* win) {
     }
 
     auto* tocTree = tab->ctrl ? tab->ctrl->GetToc() : nullptr;
-    if (!tocTree || !tocTree->root || !tocTree->root->child) {
+    if (!tocTree || !tocTree->root) {
         return;
     }
 
+    // no entries is a legitimate state, not a reason to skip loading: the
+    // bookmarks panel then shows an empty list, which is where the user
+    // creates the first bookmark (mupdf writes /Outlines when saving)
     tab->currToc = tocTree;
     win->tocLoaded = true;
 

@@ -73,6 +73,12 @@ struct FzPageInfo {
     }
 };
 
+// Bookmark ids the user creates start high up so they can never collide with
+// the ids BuildTocTree() hands out (1-based, one per outline entry in a file
+// that could in theory have millions). The id is what FileState::tocState
+// keys expansion state by, so it has to stay stable across the session.
+constexpr int kFirstUserBookmarkId = 1000000000;
+
 class EngineMupdf : public EngineBase {
   public:
     EngineMupdf();
@@ -214,6 +220,23 @@ class EngineMupdf : public EngineBase {
     // the same annotation, we should be back to 0
     bool modifiedAnnotations = false;
 
+    // set when the user edits the document outline (bookmarks) in this
+    // session. Like modifiedAnnotations it only approximates "differs from
+    // disk": the outline is not in the undo journal, so undo can't clear it
+    bool modifiedOutline = false;
+
+    // true when tocTree mirrors the PDF's /Outlines, so bookmarks can be
+    // written back. False for a tree generated from the document's headings
+    // (gAutoHeadingToc): those entries are a reading aid with no counterpart
+    // in the file. Always true once we made the tree ourselves, even for a
+    // document that had no /Outlines at all (we can add the first one)
+    bool tocFromOutline = false;
+
+    // id we hand to the next bookmark the user creates. Bookmarks that came
+    // with the file got theirs in BuildTocTree(); user ones must not collide
+    // because the id is what FileState::tocState persists expansion state by
+    int nextUserBookmarkId = kFirstUserBookmarkId;
+
     // set when a Redact annotation is created in this editing session. Apply
     // Redactions is offered for marks the user made, not for marks that came
     // with the file (which only show up as pages get loaded, see
@@ -289,6 +312,41 @@ class EngineMupdf : public EngineBase {
 };
 
 EngineMupdf* AsEngineMupdf(EngineBase* engine);
+
+// --- editing the document outline (bookmarks) ---
+// All of these write into the PDF, so the document has to be saved for the
+// change to reach the file (see EngineMupdfHasUnsavedOutline()). Only a real
+// PDF supports them; they fail for epub, images, etc.
+//
+// Page numbers here are 1-based, like everywhere above the engine:
+// TocItem::pageNo, Location::page and DocController::GoToPage all are. mupdf's
+// "#page=N" destination URI is 1-based too, so no conversion happens anywhere -
+// only mupdf's own page *index* (inside pdf_lookup_page_obj) is 0-based.
+
+// true when the document's bookmarks can be edited: a PDF we can write
+bool EngineMupdfCanEditOutline(EngineBase* engine);
+
+// true when the user changed bookmarks in this session and the change is not
+// in the file yet
+bool EngineMupdfHasUnsavedOutline(EngineBase* engine);
+
+// Undo / redo can revert a bookmark edit (mupdf journals outline changes like
+// any other), which would leave our TocItem copy showing entries the file no
+// longer has. This throws the cache away so the next GetToc() rebuilds it from
+// the PDF. The caller owns the returned tree and must delete it once nothing
+// points into it (see ReloadTocTree).
+TocTree* EngineMupdfDropOutlineCache(EngineBase* engine);
+
+// Add a bookmark. parent == nullptr adds a top-level one, otherwise the new
+// bookmark becomes parent's last child. Returns the entry we added (for the
+// caller to select) or null, leaving everything unchanged, when the document
+// can't be written or mupdf threw.
+TocItem* EngineMupdfAddOutlineItem(EngineBase* engine, TocItem* parent, Str title, int pageNo);
+
+// Rename a bookmark and / or point it at another page. Both are written in one
+// go because mupdf's outline update takes the whole entry anyway. Title may be
+// empty to keep the current one; pageNo == 0 keeps the current destination.
+bool EngineMupdfUpdateOutlineItem(EngineBase* engine, TocItem* item, Str title, int pageNo);
 
 fz_rect ToFzRect(RectF rect);
 RectF ToRectF(fz_rect rect);

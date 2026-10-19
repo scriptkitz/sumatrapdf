@@ -5522,6 +5522,9 @@ static TocTree* ReplaceTocWithHeadings(EngineMupdf* e, TocItem* headings, int id
     }
     TocItem* realRoot = AllocTocItem(e->arena, {}, 0);
     realRoot->child = root;
+    // these entries are inferred from the document's text, so there is nothing
+    // in the file to write a change back to
+    e->tocFromOutline = false;
     e->tocTree = AllocTocTree(e->arena, realRoot);
     return old;
 }
@@ -5603,6 +5606,302 @@ void EngineMupdf::StartHeadingTocIfNeeded() {
     SafeCloseThreadHandle(&th);
 }
 
+//--- editing the document outline (bookmarks)
+//
+// The bookmarks tree (TocItem) we draw is a *copy* of the PDF's /Outlines,
+// built in BuildTocTree(). Changing an entry means writing the PDF objects,
+// which mupdf only exposes through the outline iterator (insert / update).
+// So we have to find the iterator position that belongs to a given TocItem.
+//
+// Both sides walk in pre-order (item, its children, its next sibling), which
+// is what lets a parallel walk line them up:
+//
+//   BuildTocTree()          builds TocItems in that order
+//   ApplyOutlineStyles()    walks the iterator in that order (issue #3560)
+//
+// Two things are not part of /Outlines and so have no iterator position:
+//   - attachments, which BuildToc() appends to the top level of the tree
+//   - a tree generated from the document's headings (gAutoHeadingToc), which
+//     is a reading aid, not something the file has
+// Both are refused rather than written to.
+
+// Where an entry came from. Only entries from /Outlines can be written back.
+static bool TocItemIsAttachment(TocItem* item) {
+    return item && item->dest && item->dest->kind == kindDestinationAttachment;
+}
+
+// Walk the iterator and the tree together until we stand on `target`.
+// Returns false when the iterator runs out: `target` is an attachment, or the
+// two have drifted apart.
+static bool SeekOutlineItem(fz_context* ctx, fz_outline_iterator* iter, TocItem* first, TocItem* target) {
+    TocItem* item = first;
+    while (item && item != target) {
+        if (TocItemIsAttachment(item)) {
+            return false;
+        }
+        if (item->child) {
+            int res = fz_outline_iterator_down(ctx, iter);
+            if (res == 0 && SeekOutlineItem(ctx, iter, item->child, target)) {
+                return true;
+            }
+            if (res >= 0) {
+                fz_outline_iterator_up(ctx, iter);
+            }
+        }
+        if (fz_outline_iterator_next(ctx, iter) != 0) {
+            return false;
+        }
+        item = item->next;
+    }
+    return item == target;
+}
+
+// mupdf spells a page destination as a URI and its "#page=N" is 1-based, same
+// as ours (see pdf_new_explicit_dest_from_uri() and format_explicit_dest_link_uri)
+static TempStr PageDestUriTemp(int pageNo) {
+    return fmt("#page=%d", pageNo);
+}
+
+// Rewrite the outline entry the iterator stands on: a new title, a new
+// destination, or both. title == empty and pageNo == 0 each keep what is
+// already there. Color and bold/italic are always carried over.
+static bool UpdateOutlineItem(fz_context* ctx, fz_outline_iterator* iter, Str title, int pageNo) {
+    fz_outline_item* it = fz_outline_iterator_item(ctx, iter);
+    if (!it) {
+        return false;
+    }
+    // item() hands back strings the iterator owns and drops on its next call,
+    // so update() gets copies it can read while it rewrites the PDF entry
+    char* titleNew = nullptr;
+    char* uriNew = nullptr;
+    fz_var(titleNew);
+    fz_var(uriNew);
+    fz_var(iter);
+    fz_try(ctx) {
+        // keep the entry's own destination string when only the name changes:
+        // it may carry a zoom / view / rect we would otherwise flatten to Fit
+        if (pageNo != 0) {
+            TempStr uri = PageDestUriTemp(pageNo);
+            uriNew = fz_strdup(ctx, uri.s);
+        } else if (it->uri) {
+            uriNew = fz_strdup(ctx, it->uri);
+        }
+        Str t = len(title) > 0 ? title : Str(it->title ? it->title : "");
+        TempStr clean = CleanupTreeViewControlStringTemp(t);
+        if (len(clean) > 0) {
+            titleNew = fz_strdup(ctx, clean.s);
+        }
+        fz_outline_item item = *it;
+        item.title = titleNew;
+        item.uri = uriNew;
+        fz_outline_iterator_update(ctx, iter, &item);
+    }
+    fz_always(ctx) {
+        fz_free(ctx, titleNew);
+        fz_free(ctx, uriNew);
+    }
+    fz_catch(ctx) {
+        fz_rethrow(ctx);
+    }
+    return true;
+}
+
+// Park the iterator where insert() will attach the new entry to `parent`
+// (nullptr = the top level), then insert. The caller must hold docLock.
+static bool InsertOutlineItem(fz_context* ctx, EngineMupdf* e, TocItem* parent, Str title, int pageNo) {
+    fz_outline_iterator* iter = nullptr;
+    bool ok = false;
+    fz_try(ctx) {
+        iter = fz_new_outline_iterator(ctx, e->_doc);
+        // Standing on an entry with no children (down() == 1) is where a first
+        // child goes; one past the last sibling (next() == 1) is where a next
+        // sibling goes. Both are the "append" spot, they just differ in level.
+        bool positioned = true;
+        if (parent) {
+            positioned = SeekOutlineItem(ctx, iter, e->tocTree ? e->tocTree->root->child : nullptr, parent);
+            if (positioned) {
+                int res = fz_outline_iterator_down(ctx, iter);
+                if (res == 0) {
+                    // parent already has children: walk past the last one
+                    while (fz_outline_iterator_next(ctx, iter) == 0) {
+                    }
+                } else if (res != 1) {
+                    positioned = false;
+                }
+            }
+        } else if (fz_outline_iterator_item(ctx, iter)) {
+            while (fz_outline_iterator_next(ctx, iter) == 0) {
+            }
+        }
+        // positioned with the outline empty: insert() creates /Outlines and
+        // makes our entry its first one
+        if (positioned) {
+            TempStr uri = PageDestUriTemp(pageNo);
+            fz_outline_item item = {};
+            item.title = const_cast<char*>(title.s);
+            item.uri = const_cast<char*>(uri.s);
+            item.is_open = 1;
+            fz_outline_iterator_insert(ctx, iter, &item);
+            ok = true;
+        }
+    }
+    fz_always(ctx) {
+        if (iter) {
+            fz_drop_outline_iterator(ctx, iter);
+        }
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+        logf("Couldn't add bookmark to '%s': %s\n", e->FilePath(), Str(fz_caught_message(ctx)));
+        ok = false;
+    }
+    return ok;
+}
+
+// A TocItem mirroring an entry we just wrote to the PDF. The PDF is the
+// source of truth from here on; this copy only has to draw and navigate.
+// pageNo is 1-based.
+static TocItem* NewUserTocItem(EngineMupdf* e, TocItem* parent, Str title, int pageNo) {
+    TocItem* item = AllocTocItem(e->arena, title, pageNo);
+    item->parent = parent;
+    item->id = e->nextUserBookmarkId++;
+    // IsExpanded() compares the two, so this shows the new entry expanded
+    item->isOpenToggled = true;
+    // kDestUseDefault for every coordinate, not 0: that is what a page-level
+    // /Fit destination means, and it lands on the top of the page. A literal
+    // (0,0) is the page's bottom-left in PDF space and would scroll past it
+    // (see the comment in DisplayModel::ScrollTo and #2799). Zoom 0 leaves the
+    // reader's zoom alone.
+    RectF noCoords{kDestUseDefault, kDestUseDefault, kDestUseDefault, kDestUseDefault};
+    IPageDestination* dest = NewSimpleDest(e->arena, pageNo, noCoords, 0.f, {});
+    dest->loc = LocFromPageNo(pageNo);
+    item->dest = dest;
+    item->loc = dest->loc;
+    return item;
+}
+
+bool EngineMupdfCanEditOutline(EngineBase* engine) {
+    EngineMupdf* e = AsEngineMupdf(engine);
+    return e && e->pdfdoc && e->tocFromOutline;
+}
+
+bool EngineMupdfHasUnsavedOutline(EngineBase* engine) {
+    EngineMupdf* e = AsEngineMupdf(engine);
+    return e && e->pdfdoc && e->modifiedOutline;
+}
+
+TocTree* EngineMupdfDropOutlineCache(EngineBase* engine) {
+    EngineMupdf* e = AsEngineMupdf(engine);
+    if (!e || !e->pdfdoc || !e->tocTree) {
+        return nullptr;
+    }
+    ScopedRecursiveMutex cs(&e->docLock);
+    TocTree* old = e->tocTree;
+    // our fz_outline snapshot predates the edit, so re-read it too
+    auto* ctx = e->Ctx();
+    fz_try(ctx) {
+        fz_drop_outline(ctx, e->outline);
+        e->outline = fz_load_outline(ctx, e->_doc);
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+        e->outline = nullptr;
+    }
+    e->tocTree = nullptr;
+    e->tocFromOutline = false; // BuildToc() sets it for the tree it makes
+    return old;
+}
+
+// parent == nullptr adds a top-level bookmark after the last one; otherwise it
+// becomes parent's last child. Returns the entry we added, or null.
+// pageNo is 1-based, like TocItem::pageNo.
+TocItem* EngineMupdfAddOutlineItem(EngineBase* engine, TocItem* parent, Str title, int pageNo) {
+    EngineMupdf* e = AsEngineMupdf(engine);
+    if (!e || !e->pdfdoc || !e->tocTree || !e->tocTree->root || pageNo < 1) {
+        return nullptr;
+    }
+    if (parent && TocItemIsAttachment(parent)) {
+        return nullptr;
+    }
+    ScopedRecursiveMutex scope(&e->docLock);
+    if (!InsertOutlineItem(e->Ctx(), e, parent, title, pageNo)) {
+        return nullptr;
+    }
+
+    // the PDF took the change, now mirror it. Attachments sit at the end of the
+    // top level, so a new top-level entry has to go before them
+    TocItem* root = e->tocTree->root;
+    TocItem* added = nullptr;
+    if (parent) {
+        added = NewUserTocItem(e, parent, title, pageNo);
+        AppendTocChild(parent, added);
+    } else {
+        added = NewUserTocItem(e, root, title, pageNo);
+        TocItem* last = nullptr;
+        for (TocItem* c = root->child; c && !TocItemIsAttachment(c); c = c->next) {
+            last = c;
+        }
+        if (last) {
+            last->next = added;
+        } else {
+            root->child = added;
+        }
+    }
+    e->modifiedOutline = true;
+    return added;
+}
+
+// Rename a bookmark and/or retarget it, both in one mupdf call. An empty
+// title keeps the current name, pageNo == 0 keeps the current destination.
+bool EngineMupdfUpdateOutlineItem(EngineBase* engine, TocItem* item, Str title, int pageNo) {
+    EngineMupdf* e = AsEngineMupdf(engine);
+    if (!e || !e->pdfdoc || !e->tocTree || !item || pageNo < 0 || TocItemIsAttachment(item)) {
+        return false;
+    }
+    ScopedRecursiveMutex scope(&e->docLock);
+    auto* ctx = e->Ctx();
+
+    bool ok = false;
+    fz_outline_iterator* iter = nullptr;
+    fz_try(ctx) {
+        iter = fz_new_outline_iterator(ctx, e->_doc);
+        if (SeekOutlineItem(ctx, iter, e->tocTree->root->child, item)) {
+            ok = UpdateOutlineItem(ctx, iter, title, pageNo);
+        }
+    }
+    fz_always(ctx) {
+        if (iter) {
+            fz_drop_outline_iterator(ctx, iter);
+        }
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+        logf("Couldn't edit bookmark in '%s': %s\n", e->FilePath(), Str(fz_caught_message(ctx)));
+        ok = false;
+    }
+    if (!ok) {
+        return false;
+    }
+
+    // keep our copy of the entry in step with the PDF, so the tree row and
+    // navigation don't wait for a reload
+    if (len(title) > 0) {
+        // arena allocation: the old title is simply abandoned, as everywhere else
+        TempStr clean = CleanupTreeViewControlStringTemp(title);
+        item->title = str::Dup(e->arena, clean);
+    }
+    if (pageNo > 0) {
+        item->pageNo = pageNo;
+        item->loc = LocFromPageNo(pageNo);
+        if (item->dest) {
+            item->dest->pageNo = pageNo;
+            item->dest->loc = item->loc;
+        }
+    }
+    e->modifiedOutline = true;
+    return true;
+}
+
 TocTree* EngineMupdf::GetToc() {
     if (tocTree) {
         return tocTree;
@@ -5642,11 +5941,14 @@ TocTree* EngineMupdf::BuildToc() {
             root = att;
         }
     }
-    if (!root) {
-        return nullptr;
-    }
+    // root stays null for a document with neither outline nor attachments.
+    // We still build a tree: the bookmarks sidebar then shows an empty list,
+    // which is where the user creates the first bookmark (that writes
+    // /Outlines on save). A null child is how an engine spells "no entries",
+    // same as every other TocTree we hand out.
     TocItem* realRoot = AllocTocItem(arena, {}, 0);
     realRoot->child = root;
+    tocFromOutline = true;
     tocTree = AllocTocTree(arena, realRoot);
     return tocTree;
 }
@@ -9155,6 +9457,7 @@ bool EngineMupdfSaveUpdated(EngineBase* engine, Str path, const ShowErrorCb& sho
     // note: this should be short-lived as we should re-load the file
     if (ok) {
         epdf->modifiedAnnotations = false;
+        epdf->modifiedOutline = false;
         // undoing back to here means the file on disk matches again
         epdf->savedUndoPos = EngineMupdfUndoPos(epdf, nullptr);
     }
@@ -9576,9 +9879,12 @@ void EngineMupdfStartLoadAllAnnotations(EngineBase* engine, const Vec<int>& firs
     SafeCloseThreadHandle(&th);
 }
 
+// True when the document differs from the file on disk: unsaved annotations
+// or a bookmark the user added / retargeted. Every caller wants "is this
+// document dirty", not "are there annotations", so the outline counts too.
 bool EngineMupdfHasUnsavedAnnotations(EngineBase* engine) {
     EngineMupdf* epdf = AsEngineMupdf(engine);
-    return epdf && epdf->pdfdoc && epdf->modifiedAnnotations;
+    return epdf && epdf->pdfdoc && (epdf->modifiedAnnotations || epdf->modifiedOutline);
 }
 
 // redaction marks the user made in this session. Marks that came with the
@@ -10084,6 +10390,7 @@ void EngineMupdfRefreshModifiedState(EngineBase* engine) {
     if (pos < 0) {
         return;
     }
+    // outline edits aren't journalled, so undo can't clear that one
     e->modifiedAnnotations = (pos != e->savedUndoPos);
 }
 

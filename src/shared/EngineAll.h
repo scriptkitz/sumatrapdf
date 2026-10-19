@@ -149,6 +149,15 @@ Str EngineMupdfGetPassword(EngineBase* engine);
 bool EngineMupdfSaveUpdated(EngineBase* engine, Str path, const ShowErrorCb& showErrorFunc);
 bool EngineMupdfSaveCopy(EngineBase* engine, Str path);
 
+// editing the document outline (bookmarks). Only a PDF whose bookmarks come
+// from /Outlines can be edited; a tree generated from the document's headings
+// cannot. Page numbers are 1-based, like TocItem::pageNo and the UI.
+bool EngineMupdfCanEditOutline(EngineBase* engine);
+bool EngineMupdfHasUnsavedOutline(EngineBase* engine);
+TocItem* EngineMupdfAddOutlineItem(EngineBase* engine, TocItem* parent, Str title, int pageNo);
+bool EngineMupdfUpdateOutlineItem(EngineBase* engine, TocItem* item, Str title, int pageNo);
+TocTree* EngineMupdfDropOutlineCache(EngineBase* engine);
+
 // digitally signing a PDF (SignDocumentDialog.cpp drives this)
 // appearance flag bits match mupdf's PDF_SIGNATURE_SHOW_* (logo is never used)
 constexpr int kPdfSignShowLabels = 1;

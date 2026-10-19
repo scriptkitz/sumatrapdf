@@ -85,7 +85,10 @@ static int ViewControls(MainWindow* win, SidebarView v, ControlBase* out[2]) {
 bool IsSidebarViewAvailable(MainWindow* win, SidebarView v) {
     switch (v) {
         case SidebarView::Bookmarks:
-            return win->IsDocLoaded() && win->ctrl && win->ctrl->HasToc();
+            // any document can be shown here, including one with no bookmarks
+            // at all: the panel then lists nothing and the user adds entries
+            // from its context menu
+            return win->IsDocLoaded() && win->ctrl != nullptr;
         case SidebarView::Thumbnails:
             return CanShowThumbnails(win->CurrentTab());
         default:

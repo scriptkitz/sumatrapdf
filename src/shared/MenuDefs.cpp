@@ -1241,6 +1241,21 @@ MenuDef menuDefContextToc[] = {
         StrL(kMenuSeparator),
         0,
     },
+    // Both are set at runtime (see TocContextMenu): on an entry it reads
+    // "Edit Bookmark..." and opens the name + page dialog, on empty space it
+    // reads "New Bookmark..." and only adds.
+    {
+        StrL("New Bookmark..."),
+        CmdBookmarkAdd,
+    },
+    {
+        StrL("Edit Bookmark..."),
+        CmdBookmarkEdit,
+    },
+    {
+        StrL(kMenuSeparator),
+        0,
+    },
     {
         TrN("Open Embedded PDF"),
         CmdOpenEmbeddedPDF,

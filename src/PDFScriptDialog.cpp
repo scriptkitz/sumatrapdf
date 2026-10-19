@@ -94,6 +94,7 @@ struct PDFScriptWnd : WindowBase {
     void DrawExample(VirtListBox::DrawItemEvent* ev);
     void OnAdd(VirtMouseEvent* = nullptr);
     void OnRun(VirtMouseEvent* = nullptr);
+    void OnMouse(WindowBase::MouseEvent* ev);
     void OnExample();
     void OnReset(VirtMouseEvent* = nullptr);
     void OnExamples(VirtMouseEvent* = nullptr);
@@ -174,7 +175,8 @@ Edit* PDFScriptWnd::NewEdit(Str text, PlatformFont* font, Color col, bool isMult
     args.isRtl = IsUIRtl();
     args.isMultiLine = isMultiLine;
     args.noWrap = isMultiLine;
-    args.noScrollBars = isMultiLine;
+    // deliberately not noScrollBars: the source can be hundreds of lines and
+    // without a bar there was no way to see past the visible part
     auto* e = new Edit();
     e->SetColors(col, colBg);
     e->Create(args);
@@ -261,6 +263,28 @@ void PDFScriptWnd::OnAdd(VirtMouseEvent*) {
     RedrawWindow(edit->hwnd, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
 }
 
+// Windows sends the wheel to the focused window, so hovering over the source
+// box and scrolling did nothing unless that box had focus. Hand it to the edit
+// under the cursor instead.
+void PDFScriptWnd::OnMouse(WindowBase::MouseEvent* ev) {
+    if (ev->msg != WM_MOUSEWHEEL) {
+        return;
+    }
+    if (!script || !output) {
+        return; // controls not built yet
+    }
+    POINT pt{GET_X_LPARAM(ev->lparam), GET_Y_LPARAM(ev->lparam)};
+    HWND target = WindowFromPoint(pt);
+    if (!target || (target != script->hwnd && target != output->hwnd)) {
+        return;
+    }
+    if (GetFocus() == target) {
+        return; // it already scrolled itself
+    }
+    SendMessageW(target, WM_MOUSEWHEEL, ev->wparam, ev->lparam);
+    ev->didHandle = true;
+}
+
 static void ScriptFinished(u64* runId, PDFScriptResult* result) {
     if (gScriptWnd && gScriptWnd->runId == *runId) {
         auto* wnd = gScriptWnd;
@@ -268,8 +292,14 @@ static void ScriptFinished(u64* runId, PDFScriptResult* result) {
         wnd->run->SetText(Tr("Run Script"));
         SetDlgButtonEnabled(wnd->run, DlgButtonStyle::Filled, true);
         wnd->examples->SetIsEnabled(true);
-        wnd->output->SetText(str::LFToCRLFTemp(result->output));
-        wnd->ShowOutput(len(result->output) > 0);
+        // always show the box, even for a silent run: "printed nothing" and
+        // "nothing was shown" are different problems and used to look the same
+        if (len(result->output) == 0) {
+            wnd->output->SetText(Tr("(the script printed nothing)"));
+        } else {
+            wnd->output->SetText(str::LFToCRLFTemp(result->output));
+        }
+        wnd->ShowOutput(true);
     }
     delete runId;
     delete result;
@@ -425,6 +455,7 @@ void PDFScriptWnd::Create(MainWindow* owner, Str path) {
     ca.bgColor = colBg;
     onGetMinMaxInfo = MkMethod1<PDFScriptWnd, WindowBase::GetMinMaxInfoEvent*, &PDFScriptWnd::OnGetMinMaxInfo>(this);
     onPreTranslate = MkMethod1<PDFScriptWnd, WindowBase::PreTranslateEvent*, &PDFScriptWnd::PreTranslate>(this);
+    onMouseEvent = MkMethod1<PDFScriptWnd, WindowBase::MouseEvent*, &PDFScriptWnd::OnMouse>(this);
     CreateCustom(ca);
     if (!hwnd) return;
     SetColors(colTxt, colBg);

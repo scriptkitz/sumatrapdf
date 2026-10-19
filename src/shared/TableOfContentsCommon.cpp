@@ -511,3 +511,227 @@ void GoToTocTreeItem(MainWindow* win, TocItem* tocItem, bool allowExternal) {
         uitask::Post(fn, "TaskGoToTocTreeItem");
     }
 }
+
+//--- bookmarks as plain text (see the format description in the header)
+
+// A name may hold any character, so quote the two that would end or confuse the
+// field, plus the control characters that would break the line.
+static void BookmarkTextAppendEscaped(str::Builder& b, Str s) {
+    for (int i = 0; i < len(s); i++) {
+        char c = s.s[i];
+        switch (c) {
+            case '\\':
+                b.Append(StrL("\\\\"));
+                break;
+            case '"':
+                b.Append(StrL("\\\""));
+                break;
+            case '\n':
+                b.Append(StrL("\\n"));
+                break;
+            case '\r':
+                b.Append(StrL("\\r"));
+                break;
+            case '\t':
+                b.Append(StrL("\\t"));
+                break;
+            default:
+                b.AppendChar(c);
+                break;
+        }
+    }
+}
+
+static void BookmarkTextAppendLevel(str::Builder& b, TocItem* item, int depth) {
+    for (; item; item = item->next) {
+        if (TocItemIsAttachment(item)) {
+            continue;
+        }
+        for (int i = 0; i < depth; i++) {
+            b.AppendChar('\t');
+        }
+        b.AppendChar('"');
+        BookmarkTextAppendEscaped(b, item->title);
+        // pageNo is 1-based; 0 means the entry has no destination
+        b.Append(fmt("\" %d\n", item->pageNo > 0 ? item->pageNo : 0));
+        if (item->child) {
+            BookmarkTextAppendLevel(b, item->child, depth + 1);
+        }
+    }
+}
+
+Str BookmarkTextFromToc(TocItem* first) {
+    str::Builder b;
+    b.Reserve(1024);
+    BookmarkTextAppendLevel(b, first, 0);
+    return b.TakeStr();
+}
+
+static bool IsPageSep(char c) {
+    return c == ' ' || c == '\t';
+}
+
+// Read one line, building a TocItem for it. Returns "" on success, or why the
+// line couldn't be read.
+static TempStr BookmarkTextParseLine(Str line, int lineNo, TocItem* parent, int depth, TocItem** itemOut) {
+    int i = 0;
+    while (i < len(line) && line.s[i] == '\t') {
+        i++;
+    }
+    if (i != depth) {
+        return fmt("line %d: expected %d leading tab(s)", lineNo, depth);
+    }
+    if (i >= len(line) || line.s[i] != '"') {
+        return fmt("line %d: expected a quoted name", lineNo);
+    }
+    i++;
+
+    str::Builder name;
+    bool closed = false;
+    while (i < len(line)) {
+        char c = line.s[i];
+        if (c == '"') {
+            closed = true;
+            i++;
+            break;
+        }
+        if (c != '\\') {
+            name.AppendChar(c);
+            i++;
+            continue;
+        }
+        if (i + 1 >= len(line)) {
+            break;
+        }
+        char e = line.s[i + 1];
+        if (e == '"') {
+            name.AppendChar('"');
+        } else if (e == '\\') {
+            name.AppendChar('\\');
+        } else if (e == 'n') {
+            name.AppendChar('\n');
+        } else if (e == 'r') {
+            name.AppendChar('\r');
+        } else if (e == 't') {
+            name.AppendChar('\t');
+        } else {
+            char esc[2] = {e, 0};
+            return fmt("line %d: unknown escape '\\%s'", lineNo, Str(esc, 1));
+        }
+        i += 2;
+    }
+    if (!closed) {
+        return fmt("line %d: unterminated name (missing closing quote)", lineNo);
+    }
+
+    if (i >= len(line) || !IsPageSep(line.s[i])) {
+        return fmt("line %d: expected whitespace and a page number after the name", lineNo);
+    }
+    while (i < len(line) && IsPageSep(line.s[i])) {
+        i++;
+    }
+    // a page number we'd never reach; guards against garbage and overflow
+    constexpr int kMaxBookmarkPage = 1000000;
+    int pageNo = 0;
+    bool anyDigit = false;
+    while (i < len(line) && line.s[i] >= '0' && line.s[i] <= '9') {
+        anyDigit = true;
+        pageNo = pageNo * 10 + (line.s[i] - '0');
+        if (pageNo > kMaxBookmarkPage) {
+            return fmt("line %d: page number is too large", lineNo);
+        }
+        i++;
+    }
+    if (!anyDigit) {
+        return fmt("line %d: expected a page number", lineNo);
+    }
+    while (i < len(line) && IsPageSep(line.s[i])) {
+        i++;
+    }
+    if (i < len(line)) {
+        return fmt("line %d: unexpected text after the page number", lineNo);
+    }
+
+    TocItem* item = AllocTocItem(nullptr, ToStr(name), pageNo);
+    item->parent = parent;
+    *itemOut = item;
+    return {};
+}
+
+TempStr BookmarkTextParse(Str text, TocItem** rootInOut) {
+    TocItem* root = nullptr;
+    // last entry per depth, so siblings can be appended in order
+    Vec<TocItem*> lastAt;
+    int lineNo = 0;
+    int pos = 0;
+    int n = len(text);
+
+    while (pos < n) {
+        int lineEnd = pos;
+        while (lineEnd < n && text.s[lineEnd] != '\n') {
+            lineEnd++;
+        }
+        Str line(text.s + pos, lineEnd - pos);
+        pos = lineEnd + 1;
+        lineNo++;
+        if (len(line) > 0 && line.s[len(line) - 1] == '\r') {
+            line.len--;
+        }
+
+        int i = 0;
+        while (i < len(line) && line.s[i] == '\t') {
+            i++;
+        }
+        // blank line or comment
+        if (i == len(line) || line.s[i] == '#') {
+            continue;
+        }
+
+        int depth = i;
+        // mupdf stops nesting at 64 too (BuildTocTree), and everything below
+        // walks the tree recursively
+        constexpr int kMaxBookmarkDepth = 63;
+        if (depth > kMaxBookmarkDepth) {
+            return fmt("line %d: nested too deeply", lineNo);
+        }
+        if (depth > len(lastAt)) {
+            return fmt("line %d: indent jumps more than one level", lineNo);
+        }
+        TocItem* parent = depth == 0 ? nullptr : lastAt[depth - 1];
+
+        TocItem* item = nullptr;
+        TempStr err = BookmarkTextParseLine(line, lineNo, parent, depth, &item);
+        if (err) {
+            FreeTocItemRec(nullptr, root);
+            return err;
+        }
+
+        if (depth == 0) {
+            if (root) {
+                root->AddSiblingAtEnd(item);
+            } else {
+                root = item;
+            }
+        } else {
+            TocItem* p = lastAt[depth - 1];
+            if (p->child) {
+                p->child->AddSiblingAtEnd(item);
+            } else {
+                p->child = item;
+            }
+        }
+        // a new entry becomes the anchor for deeper ones and for its siblings
+        if (len(lastAt) == depth) {
+            VecAppend(lastAt, item);
+        } else {
+            lastAt[depth] = item;
+            lastAt.len = depth + 1;
+        }
+    }
+
+    if (!root) {
+        return fmt("no bookmarks in the file");
+    }
+    *rootInOut = root;
+    return {};
+}

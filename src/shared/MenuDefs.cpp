@@ -1241,9 +1241,9 @@ MenuDef menuDefContextToc[] = {
         StrL(kMenuSeparator),
         0,
     },
-    // Both are set at runtime (see TocContextMenu): on an entry it reads
-    // "Edit Bookmark..." and opens the name + page dialog, on empty space it
-    // reads "New Bookmark..." and only adds.
+    // "New Bookmark..." is renamed to "New Sub-bookmark..." when the menu was
+    // opened on an entry, and "Edit Bookmark..." is dropped when it was opened
+    // on empty space (see TocContextMenu)
     {
         StrL("New Bookmark..."),
         CmdBookmarkAdd,
@@ -1251,6 +1251,18 @@ MenuDef menuDefContextToc[] = {
     {
         StrL("Edit Bookmark..."),
         CmdBookmarkEdit,
+    },
+    {
+        StrL(kMenuSeparator),
+        0,
+    },
+    {
+        TrN("Export Bookmarks..."),
+        CmdBookmarkExport,
+    },
+    {
+        TrN("Import Bookmarks..."),
+        CmdBookmarkImport,
     },
     {
         StrL(kMenuSeparator),

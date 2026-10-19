@@ -156,6 +156,7 @@ bool EngineMupdfCanEditOutline(EngineBase* engine);
 bool EngineMupdfHasUnsavedOutline(EngineBase* engine);
 TocItem* EngineMupdfAddOutlineItem(EngineBase* engine, TocItem* parent, Str title, int pageNo);
 bool EngineMupdfUpdateOutlineItem(EngineBase* engine, TocItem* item, Str title, int pageNo);
+bool EngineMupdfReplaceOutline(EngineBase* engine, TocItem* first);
 TocTree* EngineMupdfDropOutlineCache(EngineBase* engine);
 
 // digitally signing a PDF (SignDocumentDialog.cpp drives this)

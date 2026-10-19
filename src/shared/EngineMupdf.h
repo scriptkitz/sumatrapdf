@@ -348,6 +348,13 @@ TocItem* EngineMupdfAddOutlineItem(EngineBase* engine, TocItem* parent, Str titl
 // empty to keep the current one; pageNo == 0 keeps the current destination.
 bool EngineMupdfUpdateOutlineItem(EngineBase* engine, TocItem* item, Str title, int pageNo);
 
+// Replace every bookmark with `first` (a sibling list with children, built with
+// AllocTocItem(nullptr, ...)). The engine does not take ownership. Rejects the
+// whole tree when any page number is outside the document, before writing
+// anything. On success the cached tree is stale: drop it with
+// EngineMupdfDropOutlineCache() and let the app rebuild from the file.
+bool EngineMupdfReplaceOutline(EngineBase* engine, TocItem* first);
+
 fz_rect ToFzRect(RectF rect);
 RectF ToRectF(fz_rect rect);
 void MarkNotificationAsModified(EngineMupdf*, Annotation*);

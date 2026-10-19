@@ -5626,9 +5626,8 @@ void EngineMupdf::StartHeadingTocIfNeeded() {
 // Both are refused rather than written to.
 
 // Where an entry came from. Only entries from /Outlines can be written back.
-static bool TocItemIsAttachment(TocItem* item) {
-    return item && item->dest && item->dest->kind == kindDestinationAttachment;
-}
+// (TocItemIsAttachment() lives in EngineBase.h; the import/export code needs it
+// too.)
 
 // Walk the iterator and the tree together until we stand on `target`.
 // Returns false when the iterator runs out: `target` is an attachment, or the
@@ -5900,6 +5899,93 @@ bool EngineMupdfUpdateOutlineItem(EngineBase* engine, TocItem* item, Str title, 
     }
     e->modifiedOutline = true;
     return true;
+}
+
+// Append `item` and its children as the last entries of the level the iterator
+// is currently ready to append to, then leave it ready for a next sibling.
+// Enters with the iterator either on the last inserted sibling (one past it) or
+// below the level's parent; see pdf_outline_iterator_insert().
+static void WriteOutlineLevel(fz_context* ctx, fz_outline_iterator* iter, TocItem* item) {
+    for (; item; item = item->next) {
+        // pageNo 0 is an entry with a name but no destination: leaving uri null
+        // makes do_outline_update() drop /Dest and /A, which is exactly that
+        TempStr uri = item->pageNo > 0 ? PageDestUriTemp(item->pageNo) : TempStr{};
+        fz_outline_item it = {};
+        it.title = const_cast<char*>(item->title.s);
+        it.uri = uri ? const_cast<char*>(uri.s) : nullptr;
+        it.is_open = 1;
+        fz_outline_iterator_insert(ctx, iter, &it);
+        if (!item->child) {
+            continue; // still one past this entry: the next sibling appends here
+        }
+        // to nest we must stand *on* the entry, and prev() from "one past it"
+        // is what turns the modifier back to none without moving
+        fz_outline_iterator_prev(ctx, iter);
+        if (fz_outline_iterator_down(ctx, iter) < 0) {
+            return;
+        }
+        WriteOutlineLevel(ctx, iter, item->child);
+        fz_outline_iterator_up(ctx, iter);
+        // next() with no sibling yet reports "one past", the state insert() wants
+        fz_outline_iterator_next(ctx, iter);
+    }
+}
+
+// Replace the document's bookmarks with `first`. The caller keeps owning it.
+bool EngineMupdfReplaceOutline(EngineBase* engine, TocItem* first) {
+    EngineMupdf* e = AsEngineMupdf(engine);
+    if (!e || !e->pdfdoc || !first) {
+        return false;
+    }
+    // say no to a page the document doesn't have before touching anything
+    Vec<TocItem*> pending;
+    VecAppend(pending, first);
+    while (len(pending) > 0) {
+        TocItem* item = pending[len(pending) - 1];
+        pending.len--;
+        if (item->pageNo < 0 || item->pageNo > e->pageCount) {
+            return false;
+        }
+        if (item->child) {
+            VecAppend(pending, item->child);
+        }
+        if (item->next) {
+            VecAppend(pending, item->next);
+        }
+    }
+    ScopedRecursiveMutex scope(&e->docLock);
+    auto* ctx = e->Ctx();
+
+    bool ok = false;
+    fz_outline_iterator* iter = nullptr;
+    fz_try(ctx) {
+        iter = fz_new_outline_iterator(ctx, e->_doc);
+        // deleting walks forward through the siblings; the last one steps up to
+        // /Outlines, where item() starts returning null
+        while (fz_outline_iterator_item(ctx, iter)) {
+            fz_outline_iterator_delete(ctx, iter);
+        }
+        // the deletes left us right below /Outlines, where insert() puts the
+        // first entry (and creates /Outlines itself if the file had none)
+        WriteOutlineLevel(ctx, iter, first);
+        ok = true;
+    }
+    fz_always(ctx) {
+        if (iter) {
+            fz_drop_outline_iterator(ctx, iter);
+        }
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+        logf("Couldn't import bookmarks into '%s': %s\n", e->FilePath(), Str(fz_caught_message(ctx)));
+        ok = false;
+    }
+    if (ok) {
+        // the cached tree still describes the old bookmarks; the caller drops it
+        // with EngineMupdfDropOutlineCache() and rebuilds from the file
+        e->modifiedOutline = true;
+    }
+    return ok;
 }
 
 TocTree* EngineMupdf::GetToc() {

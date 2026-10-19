@@ -767,6 +767,155 @@ static void EditBookmarkFromToc(MainWindow* win, TocItem* item) {
     ShowBookmarkInputDialog(win, args, Tr("Edit Bookmark"), item->title, fmt("%d", pageNo), Tr("Save"));
 }
 
+// A file picker for the bookmarks text file. `forSave` picks the dialog flavour
+// and the overwrite prompt. Returns "" when the user cancels.
+static TempStr PickBookmarkFileTemp(MainWindow* win, Str defName, bool forSave) {
+    if (!CanAccessDisk()) {
+        return {};
+    }
+    WCHAR pathW[MAX_PATH + 1]{};
+    if (forSave) {
+        wstr::BufSet(WStr(pathW, MAX_PATH), ToWStrTemp(defName));
+    }
+    OPENFILENAME ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = win->hwndFrame;
+    ofn.lpstrFile = pathW;
+    ofn.nMaxFile = dimof(pathW);
+    ofn.lpstrFilter = L"Text files\0*.txt\0";
+    ofn.lpstrDefExt = L"txt";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+    if (forSave) {
+        ofn.Flags |= OFN_OVERWRITEPROMPT;
+        if (!(TakeTestSaveFileName(&ofn) || GetSaveFileNameW(&ofn))) {
+            return {};
+        }
+    } else {
+        ofn.Flags |= OFN_FILEMUSTEXIST;
+        if (!GetOpenFileNameW(&ofn)) {
+            return {};
+        }
+    }
+    return ToUtf8Temp(pathW);
+}
+
+// Write the bookmarks as text, one entry per line. Read-only, so it works for a
+// document whose bookmarks can't be edited too.
+static void ExportBookmarksFromToc(MainWindow* win) {
+    WindowTab* tab = win ? win->CurrentTab() : nullptr;
+    if (!tab || !tab->ctrl) {
+        return;
+    }
+    // the command palette can run this with the pane closed, so fall back to the
+    // engine's own tree rather than depending on the tree view having loaded
+    TocTree* tree = tab->currToc ? tab->currToc : tab->ctrl->GetToc();
+    if (!tree || !tree->root) {
+        return;
+    }
+    Str text = BookmarkTextFromToc(tree->root->child);
+    TempStr defName = fmt("%s-bookmarks.txt", path::GetBaseNameTemp(tab->filePath));
+    TempStr path = PickBookmarkFileTemp(win, defName, true);
+    if (len(path) == 0) {
+        str::Free(text);
+        return;
+    }
+    bool ok = file::WriteFile(path, text);
+    str::Free(text);
+    if (!ok) {
+        MessageBoxWarning(win->hwndFrame, fmt(Tr("Couldn't write '%s'").s, path), Tr("Export Bookmarks"));
+        return;
+    }
+    ShowTemporaryNotification(win, fmt(Tr("Bookmarks exported to %s").s, path::GetBaseNameTemp(path)));
+}
+
+// Read a bookmarks text file and replace the document's bookmarks with it. The
+// format describes a whole tree, so this replaces rather than merges, and a
+// document that already has bookmarks asks first.
+static void ImportBookmarksFromToc(MainWindow* win) {
+    WindowTab* tab = win ? win->CurrentTab() : nullptr;
+    if (!tab || !tab->ctrl) {
+        return;
+    }
+    EngineBase* engine = tab->AsFixed() ? tab->AsFixed()->GetEngine() : nullptr;
+    if (!EngineMupdfCanEditOutline(engine)) {
+        MessageBoxWarning(win->hwndFrame, Tr("This document's bookmarks can't be changed."), Tr("Import Bookmarks"));
+        return;
+    }
+    TempStr path = PickBookmarkFileTemp(win, {}, false);
+    if (len(path) == 0) {
+        return;
+    }
+    Str data = file::ReadFile(path);
+    if (len(data) == 0) {
+        MessageBoxWarning(win->hwndFrame, fmt(Tr("Couldn't read '%s'").s, path), Tr("Import Bookmarks"));
+        return;
+    }
+
+    TocItem* parsed = nullptr;
+    TempStr err = BookmarkTextParse(data, &parsed);
+    str::Free(data);
+    if (err) {
+        MessageBoxWarning(win->hwndFrame, fmt(Tr("%s\n\nNothing was changed.").s, err), Tr("Import Bookmarks"));
+        return;
+    }
+
+    // A file written for another document can name pages this one doesn't
+    // have. Pull those in range instead of refusing the whole file.
+    int pageCount = tab->ctrl->PageCount();
+    int clamped = 0;
+    {
+        Vec<TocItem*> pending;
+        VecAppend(pending, parsed);
+        while (len(pending) > 0) {
+            TocItem* item = pending[len(pending) - 1];
+            pending.len--;
+            if (item->pageNo > pageCount) {
+                item->pageNo = pageCount;
+                clamped++;
+            }
+            if (item->child) {
+                VecAppend(pending, item->child);
+            }
+            if (item->next) {
+                VecAppend(pending, item->next);
+            }
+        }
+    }
+
+    // same fallback: ask before wiping even when the pane isn't open
+    TocTree* current = tab->currToc ? tab->currToc : tab->ctrl->GetToc();
+    if (current && current->root && current->root->child) {
+        int existing = ListLen(current->root->child);
+        UINT flags = MB_ICONEXCLAMATION | MB_YESNO | MbRtlReadingMaybe();
+        TempStr msg = fmt(Tr("Replace the %d bookmark(s) of this document with the ones from '%s'?").s, existing,
+                          path::GetBaseNameTemp(path));
+        if (IDYES != MsgBox(win->hwndFrame, msg, Tr("Import Bookmarks"), flags)) {
+            FreeTocItemRec(nullptr, parsed);
+            return;
+        }
+    }
+
+    bool ok = EngineMupdfReplaceOutline(engine, parsed);
+    FreeTocItemRec(nullptr, parsed);
+    if (!ok) {
+        MessageBoxWarning(win->hwndFrame, Tr("Couldn't change the bookmarks."), Tr("Import Bookmarks"));
+        return;
+    }
+    // the PDF is the source of truth now, so rebuild the tree from it
+    if (TocTree* stale = EngineMupdfDropOutlineCache(engine)) {
+        ReloadTocTree(tab);
+        DestroyTocTree(stale);
+    }
+    if (clamped > 0) {
+        ShowTemporaryNotification(win,
+                                  fmt(Tr("%d bookmark(s) pointed past the last page and were moved to it").s, clamped),
+                                  kNotif5SecsTimeOut);
+    } else {
+        ShowTemporaryNotification(win, Tr("Bookmarks imported"));
+    }
+}
+
 static void TocContextMenu(ContextMenuEvent* ev) {
     MainWindow* win = FindMainWindowByHwnd(ev->w->hwnd);
     Str filePath = win->ctrl->GetFilePath();
@@ -878,6 +1027,14 @@ static void TocContextMenu(ContextMenuEvent* ev) {
         // on empty space: add a top-level entry; there is nothing to edit
         MenuRemove(popup, CmdBookmarkEdit);
     }
+    // export only reads the tree, so a document whose bookmarks can't be
+    // written still has something to export
+    if (!tab || !tab->currToc) {
+        MenuRemove(popup, CmdBookmarkExport);
+    }
+    if (!canEditOutline) {
+        MenuRemove(popup, CmdBookmarkImport);
+    }
 
     RemoveBadMenuSeparators(popup);
     MarkMenuOwnerDraw(popup);
@@ -932,6 +1089,12 @@ static void TocContextMenu(ContextMenuEvent* ev) {
         } break;
         case CmdBookmarkEdit: {
             EditBookmarkFromToc(win, dti);
+        } break;
+        case CmdBookmarkExport: {
+            ExportBookmarksFromToc(win);
+        } break;
+        case CmdBookmarkImport: {
+            ImportBookmarksFromToc(win);
         } break;
     }
 }

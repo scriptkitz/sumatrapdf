@@ -43,3 +43,31 @@ TocItem* TreeItemForChapter(TreeModel* tm, int chapter, int pageNo);
 void OpenAttachment(WindowTab* tab, Str fileName, int attachmentNo);
 
 void GoToTocTreeItem(MainWindow* win, TocItem* tocItem, bool allowExternal);
+
+// --- bookmarks as plain text, for import / export ---
+//
+// One entry per line: leading tabs give the nesting, then the name in double
+// quotes, then the page number.
+//
+//   "Chapter 1" 1
+//   \t"Section 1.1" 12
+//   \t\t"How \"quoted\" works" 13
+//
+//   <depth tabs> "<name>" <whitespace> <page>
+//
+// Inside the name, \" is a double quote, \\ a backslash and \n \r \t the
+// control characters. Blank lines and lines whose first non-tab character is
+// # are ignored. Page numbers are 1-based; 0 marks an entry that has no
+// destination (an outline entry can carry a name and nothing else).
+
+// Serialize `first` (the first of a sibling list) and its children. Entries
+// that came from the document's embedded files are left out: they are not
+// bookmarks of the document. Returns a heap string the caller must
+// str::Free().
+Str BookmarkTextFromToc(TocItem* first);
+
+// Parse bookmarks text into a TocItem tree allocated with AllocTocItem(),
+// i.e. on the heap: release it with FreeTocItemRec(nullptr, root). Returns ""
+// when the whole text was read, otherwise a message naming the line that went
+// wrong; *rootInOut is then left untouched.
+TempStr BookmarkTextParse(Str text, TocItem** rootInOut);

@@ -341,8 +341,10 @@ enum {
     CmdRunPDFScript = 535,
     CmdBookmarkAdd = 536,
     CmdBookmarkEdit = 537,
+    CmdBookmarkExport = 538,
+    CmdBookmarkImport = 539,
 
-    CmdLast = 537,
+    CmdLast = 539,
     CmdFirstCustom = CmdLast + 100,
 
     // aliases, at the end to not mess ordering

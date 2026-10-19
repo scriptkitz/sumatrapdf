@@ -266,6 +266,8 @@ const CommandInfo gCommands[] = {
     {CmdTocCollapseSameLevel, "CmdTocCollapseSameLevel\0", StrL("Bookmarks: Collapse Same Level")},
     {CmdBookmarkAdd, "CmdBookmarkAdd\0", StrL("Bookmarks: New Bookmark")},
     {CmdBookmarkEdit, "CmdBookmarkEdit\0", StrL("Bookmarks: Edit Bookmark")},
+    {CmdBookmarkExport, "CmdBookmarkExport\0", StrL("Bookmarks: Export to Text File...")},
+    {CmdBookmarkImport, "CmdBookmarkImport\0", StrL("Bookmarks: Import from Text File...")},
     {CmdToggleFavoritesSort, "CmdToggleFavoritesSort\0", StrL("Sort Favorites By Name")},
     {CmdZoomFitHeight, "CmdZoomFitHeight\0", StrL("Zoom: Fit Height")},
     {CmdDeleteFileAndOpenNext, "CmdDeleteFileAndOpenNext\0", StrL("Delete File And Open Next")},

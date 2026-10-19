@@ -371,6 +371,13 @@ struct TocItem {
 TocItem* AllocTocItem(Arena* arena, Str title, int pageNo);
 void FreeTocItemRec(Arena* arena, TocItem* item);
 
+// True for an entry that came from the document's embedded files rather than
+// from its outline. Engines append those to the top level of the bookmarks
+// tree, but they are not bookmarks: they cannot be edited or exported.
+static inline bool TocItemIsAttachment(TocItem* item) {
+    return item && item->dest && item->dest->kind == kindDestinationAttachment;
+}
+
 // Sanitize a string for display in a single-line tree-view control (e.g. a
 // bookmark/TOC label): drop soft hyphens and turn control chars / line
 // separators into spaces, so they don't render as a stray hyphen or as

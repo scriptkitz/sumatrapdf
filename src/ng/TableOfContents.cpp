@@ -435,6 +435,8 @@ MenuModel* BuildTocContextMenu(MainWindow* win, TocItem* dti) {
     // bookmark editing is Windows-only for now, so don't offer it here
     MenuRemove(popup, CmdBookmarkAdd);
     MenuRemove(popup, CmdBookmarkEdit);
+    MenuRemove(popup, CmdBookmarkExport);
+    MenuRemove(popup, CmdBookmarkImport);
     RemoveBadMenuSeparators(popup);
     logf("BuildTocContextMenu: '%s', %d rows\n", dti ? dti->title : Str{}, popup->items.len);
     return popup;

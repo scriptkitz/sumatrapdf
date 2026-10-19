@@ -1391,6 +1391,10 @@ static TempStr UpdateCommandNameTemp(MainWindow* win, int cmdId, Str s) {
             isToggle = true;
             newIsOn = !ShowImageOutlines();
         } break;
+        case CmdToggleHideBezierCurves: {
+            isToggle = true;
+            newIsOn = !EngineMupdfHideBezierCurves();
+        } break;
         case CmdToggleTransparencyGrid: {
             isToggle = true;
             newIsOn = !ShowTransparencyGrid();

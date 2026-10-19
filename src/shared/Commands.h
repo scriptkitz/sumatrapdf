@@ -343,8 +343,9 @@ enum {
     CmdBookmarkEdit = 537,
     CmdBookmarkExport = 538,
     CmdBookmarkImport = 539,
+    CmdToggleHideBezierCurves = 540,
 
-    CmdLast = 539,
+    CmdLast = 540,
     CmdFirstCustom = CmdLast + 100,
 
     // aliases, at the end to not mess ordering

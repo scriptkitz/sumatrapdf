@@ -222,6 +222,10 @@ void EngineMupdfSetDisableJavaScript(bool disable);
 float EngineMupdfSetEbookLayoutAspect(float dyOverDx);
 void EngineMupdfSetAllowExternalImages(bool allow);
 void EngineMupdfSetAutoHeadingToc(bool enable);
+// debug aid (Debug menu, session-only): skip paths that use bezier curves.
+// Takes effect on the next render, so cached bitmaps must be dropped first.
+bool EngineMupdfHideBezierCurves();
+void EngineMupdfSetHideBezierCurves(bool enable);
 enum class AnnotAuthorVisibility {
     Hide,
     Show

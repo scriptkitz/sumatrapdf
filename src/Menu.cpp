@@ -938,6 +938,7 @@ static void MenuUpdateStateForWindow(MainWindow* win) {
     MenuSetChecked(win->menu, CmdToggleTransparencyGrid, ShowTransparencyGrid());
     MenuSetChecked(win->menu, CmdTogglePageGrid, ShowPageGrid());
     MenuSetChecked(win->menu, CmdToggleImages, ShowImageOutlines());
+    MenuSetChecked(win->menu, CmdToggleHideBezierCurves, EngineMupdfHideBezierCurves());
     MenuSetChecked(win->menu, CmdDebugShowFitContentArea, ShowFitContentArea());
     MenuSetEnabled(win->menu, CmdTabGroupSave, HasOpenedDocuments(win));
     MenuSetChecked(win->menu, CmdToggleFilePicker, gSettings && str::EqI(gSettings->filePicker, StrL("sumatrapdf")));

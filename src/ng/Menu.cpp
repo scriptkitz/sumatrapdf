@@ -706,6 +706,10 @@ static void SetMenuChecks(MenuModel* menu, MainWindow* win) {
             it.checked = ShowImageOutlines();
             continue;
         }
+        if (it.cmdId == CmdToggleHideBezierCurves) {
+            it.checked = EngineMupdfHideBezierCurves();
+            continue;
+        }
         if (it.cmdId == CmdDebugShowFitContentArea) {
             it.checked = ShowFitContentArea();
             continue;

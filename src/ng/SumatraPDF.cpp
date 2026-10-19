@@ -5657,6 +5657,19 @@ void ExecuteCmd(MainWindow* win, int cmdId) {
             }
             break;
 
+        case CmdToggleHideBezierCurves:
+            EngineMupdfSetHideBezierCurves(!EngineMupdfHideBezierCurves());
+            // changes the rendered page, so the cached tiles have to go
+            for (MainWindow* w : gWindows) {
+                // w's own model, not the command target's `dm`
+                if (DisplayModel* dmFixed = w->AsFixed()) {
+                    gRenderCache->AbortRendering(dmFixed);
+                    gRenderCache->FreeForDisplayModel(dmFixed);
+                }
+                w->RedrawAll(true);
+            }
+            break;
+
         case CmdToggleTransparencyGrid:
             ToggleTransparencyGrid();
             for (MainWindow* w : gWindows) {

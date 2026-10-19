@@ -67,6 +67,7 @@ static const i32 gNoDocWhitelist[] = {
     CmdToggleHighlightFormFields,
     CmdToggleDisableLinks,
     CmdToggleImages,
+    CmdToggleHideBezierCurves,
     CmdToggleTransparencyGrid,
     CmdTogglePageGrid,
     CmdConfigurePageGrid,

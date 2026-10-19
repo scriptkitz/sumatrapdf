@@ -276,6 +276,7 @@ const CommandInfo gCommands[] = {
     {CmdToggleKeyboardLinkFollowing, "CmdToggleKeyboardLinkFollowing\0", StrL("Follow Link With Keyboard")},
     {CmdDebugToggleDpiOverride, "CmdDebugToggleDpiOverride\0", StrL("Debug: Toggle DPI Override")},
     {CmdToggleImages, "CmdToggleImages\0", StrL("Toggle Show Images")},
+    {CmdToggleHideBezierCurves, "CmdToggleHideBezierCurves\0", StrL("Debug: Hide Bezier Curves")},
     {CmdSelectTextViaKeyboard, "CmdSelectTextViaKeyboard\0", StrL("Select Text With Keyboard")},
     {CmdOpenFileWithOSFilePicker, "CmdOpenFileWithOSFilePicker\0", StrL("Open File With Windows File Picker...")},
     {CmdToggleFilePicker, "CmdToggleFilePicker\0", StrL("SumatraPDF File Picker")},

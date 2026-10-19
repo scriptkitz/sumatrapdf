@@ -645,6 +645,10 @@ MenuDef menuDefDebug[] = {
         CmdToggleImages,
     },
     {
+        StrL("Hide bezier curves"),
+        CmdToggleHideBezierCurves,
+    },
+    {
         StrL("Show fit content area"),
         CmdDebugShowFitContentArea,
     },

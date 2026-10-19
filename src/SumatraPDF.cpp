@@ -11226,6 +11226,20 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             }
             break;
 
+        case CmdToggleHideBezierCurves:
+            EngineMupdfSetHideBezierCurves(!EngineMupdfHideBezierCurves());
+            // unlike the image outlines above this changes the rendered page,
+            // so redrawing alone would just repaint the cached tiles
+            for (auto& w : gWindows) {
+                // w's own model, not the command target's `dm`
+                if (DisplayModel* dmFixed = w->AsFixed()) {
+                    gRenderCache->AbortRendering(dmFixed);
+                    gRenderCache->FreeForDisplayModel(dmFixed);
+                }
+                w->RedrawAll(true);
+            }
+            break;
+
         case CmdToggleTransparencyGrid:
             ToggleTransparencyGrid();
             // cached tiles were rendered opaque; bump epoch so they are not reused

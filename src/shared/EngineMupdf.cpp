@@ -115,6 +115,18 @@ void EngineMupdfSetAutoHeadingToc(bool enable) {
     gAutoHeadingToc = enable;
 }
 
+// Drop paths built from bezier curves instead of drawing them. A debug aid
+// (Debug menu), so session-only like the other toggles there: it never reaches
+// the settings file. Read at render time, so flipping it only needs the cached
+// bitmaps thrown away.
+static bool gHideBezierCurves = false;
+void EngineMupdfSetHideBezierCurves(bool enable) {
+    gHideBezierCurves = enable;
+}
+bool EngineMupdfHideBezierCurves() {
+    return gHideBezierCurves;
+}
+
 static bool gShowAnnotAuthorInTooltip = false;
 void EngineMupdfSetAnnotAuthorInTooltip(AnnotAuthorVisibility visibility) {
     gShowAnnotAuthorInTooltip = visibility == AnnotAuthorVisibility::Show;
@@ -7389,12 +7401,76 @@ static bool RenderAborted(fz_cookie* cookie) {
 // can't be closed ("items left on stack"). Unhook close on it and on the
 // wrappers that forward to it, so dropping them doesn't warn either.
 static void UnhookAbortedDevices(fz_device* drawDev, fz_device* outer) {
-    fz_device* devs[] = {drawDev, outer};
-    for (fz_device* d : devs) {
-        if (d) {
-            d->close_device = nullptr;
-        }
+    // Walk the whole chain, not a fixed pair: how many wrappers sit between the
+    // outermost device and the raw draw device depends on which render filters
+    // are on, and any of them still claiming to be closable warns on drop.
+    fz_device* first = outer ? outer : drawDev;
+    int guard = 0;
+    for (fz_device* d = first; d && guard < 16; d = d->passthrough, guard++) {
+        d->close_device = nullptr;
     }
+}
+
+// Does this path contain a curve segment? fz_path is opaque, so the only way to
+// ask is to walk it; fz_walk_path calls the arity-specific callbacks and we only
+// care whether one of the four curve ones fired.
+struct CurveProbe {
+    bool hasCurves = false;
+};
+
+static void CurveProbeNoop2(fz_context*, void*, float, float) {}
+static void CurveProbeNoopClose(fz_context*, void*) {}
+static void CurveProbeCurve6(fz_context*, void* arg, float, float, float, float, float, float) {
+    ((CurveProbe*)arg)->hasCurves = true;
+}
+static void CurveProbeCurve4(fz_context*, void* arg, float, float, float, float) {
+    ((CurveProbe*)arg)->hasCurves = true;
+}
+
+static bool PathHasCurves(fz_context* ctx, const fz_path* path) {
+    // rectto is optional and left out: a rectangle carries no curve
+    static const fz_path_walker kProbe = {
+        CurveProbeNoop2,     // moveto
+        CurveProbeNoop2,     // lineto
+        CurveProbeCurve6,    // curveto
+        CurveProbeNoopClose, // closepath
+        CurveProbeCurve4,    // quadto
+        CurveProbeCurve4,    // curvetov
+        CurveProbeCurve4,    // curvetoy
+        nullptr,             // rectto
+    };
+    CurveProbe probe;
+    fz_walk_path(ctx, path, &kProbe, &probe);
+    return probe.hasCurves;
+}
+
+static void HideBezierFillPath(fz_context* ctx, fz_device* dev, const fz_path* path, int even_odd, fz_matrix ctm,
+                               fz_colorspace* colorspace, const float* color, float alpha,
+                               fz_color_params color_params) {
+    if (PathHasCurves(ctx, path)) {
+        return;
+    }
+    fz_fill_path(ctx, dev->passthrough, path, even_odd, ctm, colorspace, color, alpha, color_params);
+}
+
+static void HideBezierStrokePath(fz_context* ctx, fz_device* dev, const fz_path* path, const fz_stroke_state* stroke,
+                                 fz_matrix ctm, fz_colorspace* colorspace, const float* color, float alpha,
+                                 fz_color_params color_params) {
+    if (PathHasCurves(ctx, path)) {
+        return;
+    }
+    fz_stroke_path(ctx, dev->passthrough, path, stroke, ctm, colorspace, color, alpha, color_params);
+}
+
+// Wrap <inner> so curved paths are skipped. Takes ownership of <inner>, like
+// PdfCadEnhanceWrapDevice(). Clips are deliberately left alone: dropping a clip
+// changes what the rest of the page paints, dropping a fill does not.
+static fz_device* HideBezierWrapDevice(fz_context* ctx, fz_device* inner) {
+    fz_device* dev = fz_new_passthrough_device_of_size(ctx, inner, sizeof(fz_device));
+    fz_drop_device(ctx, inner);
+    dev->fill_path = HideBezierFillPath;
+    dev->stroke_path = HideBezierStrokePath;
+    return dev;
 }
 
 Pixmap* EngineMupdf::RenderPage(RenderPageArgs& args) {
@@ -7494,6 +7570,9 @@ Pixmap* EngineMupdf::RenderPage(RenderPageArgs& args) {
             if (CadEnhanceActive()) {
                 dev = PdfCadEnhanceWrapDevice(ctx, dev);
             }
+            if (gHideBezierCurves) {
+                dev = HideBezierWrapDevice(ctx, dev);
+            }
             fz_run_display_list(ctx, keptList, dev, fz_identity, pRect, fzcookie);
             if (RenderAborted(fzcookie)) {
                 UnhookAbortedDevices(drawDev, dev);
@@ -7547,6 +7626,9 @@ Pixmap* EngineMupdf::RenderPage(RenderPageArgs& args) {
             if (disableAntiAlias) {
                 fz_enable_device_hints(ctx, dev, FZ_DONT_INTERPOLATE_IMAGES);
             }
+            if (gHideBezierCurves) {
+                dev = HideBezierWrapDevice(ctx, dev);
+            }
             if (hideAnnotations) {
                 pdf_run_page_contents_with_usage(ctx, pdfpage, dev, fz_identity, usageZ, fzcookie);
                 pdf_run_page_widgets_with_usage(ctx, pdfpage, dev, fz_identity, usageZ, fzcookie);
@@ -7582,6 +7664,9 @@ Pixmap* EngineMupdf::RenderPage(RenderPageArgs& args) {
             dev = fz_new_draw_device(ctx, ctm, pix);
             if (disableAntiAlias) {
                 fz_enable_device_hints(ctx, dev, FZ_DONT_INTERPOLATE_IMAGES);
+            }
+            if (gHideBezierCurves) {
+                dev = HideBezierWrapDevice(ctx, dev);
             }
             fz_run_page_contents(ctx, page, dev, fz_identity, nullptr);
             fz_close_device(ctx, dev);

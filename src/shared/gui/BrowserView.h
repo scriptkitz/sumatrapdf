@@ -54,7 +54,6 @@ void BrowserViewSetWindow(BrowserView*, MainWindow*);
 
 // show / hide without destroying the browser (a tab switch)
 void BrowserViewSetVisible(BrowserView*, bool visible);
-bool BrowserViewIsVisible(BrowserView*);
 void BrowserViewRefreshSurface(BrowserView*);
 
 void BrowserViewNavigate(BrowserView*, Str url);
@@ -75,6 +74,7 @@ void BrowserViewEval(BrowserView*, Str js);
 
 void BrowserViewSelectAll(BrowserView*);
 void BrowserViewCopySelection(BrowserView*);
+bool BrowserViewCapturePng(BrowserView*, const Func1<Str>& done);
 void BrowserViewPrint(BrowserView*, bool showUI = true);
 // the browser's own find bar (orig's FindInCurrentPage)
 void BrowserViewFindInPageUI(BrowserView*);
@@ -85,6 +85,8 @@ void BrowserViewFindAllPages(BrowserView*, const StrVec& pageUrls, Str term, boo
 void BrowserViewFindGoto(BrowserView*, int idx);
 void BrowserViewFindClear(BrowserView*);
 LRESULT BrowserViewPassUIMsg(BrowserView*, UINT msg, WPARAM wp, LPARAM lp);
+// scroll the page as a navigation key (VK_DOWN, VK_NEXT, …) does in a browser
+void BrowserViewScrollKey(BrowserView*, int vk);
 
 bool BrowserViewCreateInProgress();
 

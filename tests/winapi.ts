@@ -55,6 +55,10 @@ const user32 = loadDll("user32.dll", {
   GetWindow: { args: [FFIType.ptr, FFIType.u32], returns: FFIType.u64 },
   PostMessageW: { args: [FFIType.ptr, FFIType.u32, FFIType.i64, FFIType.i64], returns: FFIType.bool },
   SendMessageW: { args: [FFIType.ptr, FFIType.u32, FFIType.i64, FFIType.i64], returns: FFIType.i64 },
+  SendMessageTimeoutW: {
+    args: [FFIType.ptr, FFIType.u32, FFIType.i64, FFIType.i64, FFIType.u32, FFIType.u32, FFIType.ptr],
+    returns: FFIType.i64,
+  },
   MoveWindow: {
     args: [FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.bool],
     returns: FFIType.bool,
@@ -70,6 +74,10 @@ const user32 = loadDll("user32.dll", {
   InvalidateRect: { args: [FFIType.ptr, FFIType.ptr, FFIType.bool], returns: FFIType.bool },
   UpdateWindow: { args: [FFIType.ptr], returns: FFIType.bool },
   IsZoomed: { args: [FFIType.ptr], returns: FFIType.bool },
+  IsIconic: { args: [FFIType.ptr], returns: FFIType.bool },
+  AttachThreadInput: { args: [FFIType.u32, FFIType.u32, FFIType.bool], returns: FFIType.bool },
+  GetKeyboardState: { args: [FFIType.ptr], returns: FFIType.bool },
+  SetKeyboardState: { args: [FFIType.ptr], returns: FFIType.bool },
   GetClientRect: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.bool },
   GetScrollInfo: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr], returns: FFIType.bool },
   SetCursorPos: { args: [FFIType.i32, FFIType.i32], returns: FFIType.bool },
@@ -122,6 +130,8 @@ const user32 = loadDll("user32.dll", {
   GetClipboardData: { args: [FFIType.u32], returns: FFIType.u64 },
   EnumClipboardFormats: { args: [FFIType.u32], returns: FFIType.u32 },
   EmptyClipboard: { args: [], returns: FFIType.bool },
+  GetClipboardSequenceNumber: { args: [], returns: FFIType.u32 },
+  SetClipboardData: { args: [FFIType.u32, FFIType.u64], returns: FFIType.u64 },
 });
 
 // GDI + GDI+ for capturing a window to a PNG (see captureWindowToPng). Capturing
@@ -198,6 +208,7 @@ const gdiplus = loadDll("gdiplus.dll", {
 });
 
 const kernel32 = loadDll("kernel32.dll", {
+  GetCurrentThreadId: { args: [], returns: FFIType.u32 },
   CreateProcessW: {
     args: [
       FFIType.ptr,
@@ -229,6 +240,8 @@ const kernel32 = loadDll("kernel32.dll", {
   GlobalLock: { args: [FFIType.u64], returns: FFIType.ptr },
   GlobalUnlock: { args: [FFIType.u64], returns: FFIType.bool },
   GlobalSize: { args: [FFIType.u64], returns: FFIType.u64 },
+  GlobalAlloc: { args: [FFIType.u32, FFIType.u64], returns: FFIType.u64 },
+  GlobalFree: { args: [FFIType.u64], returns: FFIType.u64 },
 });
 
 // Authenticode helpers (mirror src/base/Crypto.cpp GetExecutableSignerTemp / IsPEFileSigned).
@@ -316,6 +329,11 @@ export const WM_CONTEXTMENU = 0x007b;
 export const WM_KILLFOCUS = 0x0008;
 export const WM_COMMAND = 0x0111;
 export const WM_SYSCOMMAND = 0x0112;
+export const CB_SETCURSEL = 0x014e;
+export const CBN_SELCHANGE = 1;
+export const BM_SETCHECK = 0x00f1;
+export const BST_CHECKED = 1;
+export const ES_MULTILINE = 0x0004;
 export const SC_CLOSE = 0xf060;
 export const WM_COPYDATA = 0x004a;
 // virtual-key / mouse-button flags
@@ -354,6 +372,8 @@ export const PW_RENDERFULLCONTENT = 0x00000002;
 export const SRCCOPY = 0x00cc0020;
 export const COLORONCOLOR = 3; // StretchBlt mode: no smoothing
 // ShowWindow commands
+export const SW_SHOWMINNOACTIVE = 7;
+export const SW_SHOWNOACTIVATE = 4;
 export const SW_RESTORE = 9;
 export const SW_MAXIMIZE = 3;
 // GetSystemMetrics indices
@@ -823,6 +843,13 @@ export async function postChar(hwnd: number, ch: string): Promise<boolean> {
 // target window to finish handling the message before reading state. Returns the
 // LRESULT as a bigint -- TreeView messages return HTREEITEM pointers that can
 // exceed 2^53, so they must not be coerced to a JS number.
+const WM_NULL = 0x0000;
+
+// whether hwnd's thread answers a WM_NULL within timeoutMs: false while it's busy
+export function windowResponds(hwnd: number, timeoutMs: number): boolean {
+  return user32.symbols.SendMessageTimeoutW(hwnd, WM_NULL, 0n, 0n, 0, timeoutMs, null) !== 0n;
+}
+
 export function sendMessage(hwnd: number, msg: number, wParam: number | bigint, lParam: number | bigint): bigint {
   if (ngInput(hwnd, msg, wParam, lParam, false)) {
     return 0n;
@@ -1024,6 +1051,42 @@ export function isKeyDownAsync(vk: number): boolean {
 }
 
 const KEYEVENTF_KEYUP = 0x0002;
+
+export function isIconic(hwnd: number): boolean {
+  return user32.symbols.IsIconic(hwnd);
+}
+
+const kKeyDown = 0x80;
+
+// Posts WM_KEYDOWN vk to hwnd with Shift held, for a Shift shortcut. Injected
+// input is dropped here and a posted key carries no modifier, so share the app
+// thread's key state (AttachThreadInput) and mark Shift down in it: that is what
+// GetKeyState and TranslateAccelerator read. Call the returned function once the
+// app handled the key, to release Shift and detach.
+export function postKeyWithShift(hwnd: number, vk: number): () => void {
+  return postKeyWithModifier(hwnd, vk, VK_SHIFT);
+}
+
+// postKeyWithShift for any modifier (VK_CONTROL for a Ctrl shortcut)
+export function postKeyWithModifier(hwnd: number, vk: number, modVk: number): () => void {
+  const appThread = user32.symbols.GetWindowThreadProcessId(hwnd, null);
+  const ourThread = kernel32.symbols.GetCurrentThreadId();
+  if (!user32.symbols.AttachThreadInput(ourThread, appThread, true)) {
+    throw new Error("postKeyWithModifier: AttachThreadInput failed");
+  }
+  const keys = new Uint8Array(256);
+  const setMod = (down: boolean) => {
+    user32.symbols.GetKeyboardState(ptr(keys));
+    keys[modVk] = down ? kKeyDown : 0;
+    user32.symbols.SetKeyboardState(ptr(keys));
+  };
+  setMod(true);
+  user32.symbols.PostMessageW(hwnd, WM_KEYDOWN, vk, 1);
+  return () => {
+    setMod(false);
+    user32.symbols.AttachThreadInput(ourThread, appThread, false);
+  };
+}
 
 // inject a key-up for vk, clearing a key the system thinks is still held
 export function injectKeyUp(vk: number): void {
@@ -1271,12 +1334,62 @@ export function getClipboardDibInfo(): { width: number; height: number; bitCount
   }
 }
 
+// Puts `text` on the clipboard as CF_UNICODETEXT, verbatim (no line ending conversion).
+export function setClipboardText(text: string): boolean {
+  const CF_UNICODETEXT = 13;
+  const GMEM_MOVEABLE = 0x2;
+  if (!user32.symbols.OpenClipboard(null)) {
+    return false;
+  }
+  try {
+    user32.symbols.EmptyClipboard();
+    const src = wideZ(text);
+    const h = kernel32.symbols.GlobalAlloc(GMEM_MOVEABLE, src.byteLength);
+    if (!h) {
+      return false;
+    }
+    const mem = kernel32.symbols.GlobalLock(h);
+    if (!mem) {
+      kernel32.symbols.GlobalFree(h);
+      return false;
+    }
+    new Uint8Array(toArrayBuffer(mem, 0, src.byteLength)).set(new Uint8Array(src.buffer));
+    kernel32.symbols.GlobalUnlock(h);
+    if (!user32.symbols.SetClipboardData(CF_UNICODETEXT, h)) {
+      kernel32.symbols.GlobalFree(h);
+      return false;
+    }
+    return true;
+  } finally {
+    user32.symbols.CloseClipboard();
+  }
+}
+
+// Changes on every clipboard update; reading it doesn't open the clipboard.
+export function clipboardSeqNo(): number {
+  return user32.symbols.GetClipboardSequenceNumber();
+}
+
 export function emptyClipboard(): boolean {
   if (!user32.symbols.OpenClipboard(null)) {
     return false;
   }
   try {
     return user32.symbols.EmptyClipboard();
+  } finally {
+    user32.symbols.CloseClipboard();
+  }
+}
+
+// Keeps the clipboard open for `ms`, as a clipboard listener (rdpclip,
+// clipboard history) does after a change.
+export async function holdClipboard(ms: number): Promise<boolean> {
+  if (!user32.symbols.OpenClipboard(null)) {
+    return false;
+  }
+  try {
+    await sleep(ms);
+    return true;
   } finally {
     user32.symbols.CloseClipboard();
   }
@@ -1497,6 +1610,20 @@ export function injectTouch(x: number, y: number, flag: number): boolean {
 
 // The real cursor position, in screen (physical, when this process is DPI
 // aware) coordinates.
+// Without an interactive desktop (a disconnected RDP session) SetCursorPos
+// fails or the cursor stays put, so a test that hovers by moving the real
+// cursor can't run. Moves it by a pixel and back to find out.
+export function canMoveCursor(): boolean {
+  const was = getCursorPos();
+  const probe = { x: was.x === 1 ? 2 : 1, y: was.y === 1 ? 2 : 1 };
+  if (!setCursorPos(probe.x, probe.y)) {
+    return false;
+  }
+  const now = getCursorPos();
+  setCursorPos(was.x, was.y);
+  return now.x === probe.x && now.y === probe.y;
+}
+
 export function getCursorPos(): { x: number; y: number } {
   if (IS_MAC) {
     return macCursor;

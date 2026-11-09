@@ -28,6 +28,8 @@ static_assert((int)AnnotationType::Link == (int)PDF_ANNOT_LINK);
 static_assert((int)AnnotationType::ThreeD == (int)PDF_ANNOT_3D);
 static_assert((int)AnnotationType::Sound == (int)PDF_ANNOT_SOUND);
 static_assert((int)AnnotationType::Unknown == (int)PDF_ANNOT_UNKNOWN);
+static_assert((int)AnnotationType::Projection == (int)PDF_ANNOT_PROJECTION);
+static_assert(AnnotationType::Last == AnnotationType::Projection);
 
 // clang-format off
 static SeqStrings gAnnotationTextIcons = "Comment\0Help\0Insert\0Key\0NewParagraph\0Note\0Paragraph\0";
@@ -40,15 +42,12 @@ SeqStrings AnnotationTextIcons() {
 // clang-format off
 // indexed by AnnotationType; unlike AnnotationReadableNameTemp() these are not
 // translated, so they can appear in the annotation filter's ":t=" syntax
-static SeqStrings gAnnotationTypeNames =
+static constexpr SeqStrings gAnnotationTypeNames =
     "Text\0Link\0FreeText\0Line\0Square\0Circle\0Polygon\0PolyLine\0Highlight\0Underline\0Squiggly\0"
     "StrikeOut\0Redact\0Stamp\0Caret\0Ink\0Popup\0FileAttachment\0Sound\0Movie\0RichMedia\0Widget\0"
     "Screen\0PrinterMark\0TrapNet\0Watermark\0ThreeD\0Projection\0";
 // clang-format on
-
-SeqStrings AnnotationTypeNames() {
-    return gAnnotationTypeNames;
-}
+static_assert(SeqStrCount(gAnnotationTypeNames) == (int)AnnotationType::Last + 1);
 
 // Matches case- and space-insensitively, so "free text" and "freetext" both
 // name AnnotationType::FreeText. Unknown if there is no such type.
@@ -192,6 +191,8 @@ static bool UpdateAnnotIf(Annotation* annot, Update update) {
             changed = update(access.ctx, access.annot);
             if (changed) {
                 pdf_update_annot(access.ctx, access.annot);
+                // e.g. a border width change moves /Rect
+                annot->bounds = PdfAnnotBounds(access.ctx, access.annot);
             }
         }
         fz_catch(access.ctx) {
@@ -2057,6 +2058,8 @@ struct AnnotationClipboard {
     // the annotation's /Rect, not GetBounds(): the bound is expanded by the
     // border width, so a copy -> paste -> copy round trip would grow it
     RectF rect{};
+    // /RD: mupdf gives new shapes 0.5, which would widen /Rect and the border
+    fz_rect rectDiff{};
     Str contents;
     Str iconName;
     Str fontFamily;
@@ -2085,7 +2088,8 @@ struct AnnotationClipboard {
 
 static AnnotationClipboard gAnnotClipboard;
 
-static void ClearAnnotationClipboard() {
+// gAnnotClipboard owns strings, Vecs and a stamp bitmap; also frees them at exit
+void FreeAnnotationClipboard() {
     gPendingCutAnnotation = nullptr;
     str::FreePtr(&gAnnotClipboard.contents);
     str::FreePtr(&gAnnotClipboard.iconName);
@@ -2096,6 +2100,7 @@ static void ClearAnnotationClipboard() {
     gAnnotClipboard.valid = false;
     gAnnotClipboard.type = AnnotationType::Unknown;
     gAnnotClipboard.rect = {};
+    gAnnotClipboard.rectDiff = {};
     gAnnotClipboard.color = 0;
     gAnnotClipboard.hasColor = false;
     gAnnotClipboard.interiorColor = 0;
@@ -2203,11 +2208,6 @@ bool HasCopiedAnnotation() {
     return gAnnotClipboard.valid;
 }
 
-// gAnnotClipboard owns strings, Vecs and a stamp bitmap; free them at exit
-void FreeAnnotationClipboard() {
-    ClearAnnotationClipboard();
-}
-
 // The annotation's /Rect. GetBounds() is pdf_bound_annot(), which is expanded
 // by the border width and would grow the annotation on every copy -> paste.
 static RectF GetAnnotRect(Annotation* annot) {
@@ -2228,6 +2228,39 @@ static RectF GetAnnotRect(Annotation* annot) {
         return GetBounds(annot);
     }
     return ToRectF(rc);
+}
+
+// The annotation's /RD, all zeros when it has none. Read through the local
+// xref, like pdf_annot_rect(): a synthesized appearance can set /RD only there.
+static fz_rect GetRectDiff(Annotation* annot) {
+    return ReadAnnot(annot, fz_rect{}, [](fz_context* ctx, pdf_annot* a) {
+        fz_rect rd{};
+        pdf_annot_push_local_xref(ctx, a);
+        fz_try(ctx) {
+            pdf_obj* obj = pdf_dict_get(ctx, pdf_annot_obj(ctx, a), PDF_NAME(RD));
+            if (pdf_is_array(ctx, obj)) {
+                rd.x0 = pdf_array_get_real(ctx, obj, 0);
+                rd.y0 = pdf_array_get_real(ctx, obj, 1);
+                rd.x1 = pdf_array_get_real(ctx, obj, 2);
+                rd.y1 = pdf_array_get_real(ctx, obj, 3);
+            }
+        }
+        fz_always(ctx) {
+            pdf_annot_pop_local_xref(ctx, a);
+        }
+        fz_catch(ctx) {
+            fz_rethrow(ctx);
+        }
+        return rd;
+    });
+}
+
+// Set /RD, then re-set the design rect so /Rect = rect + RD.
+static void SetRectAndDiff(Annotation* annot, RectF rect, fz_rect rd) {
+    UpdateAnnot(annot, [rect, rd](fz_context* ctx, pdf_annot* a) {
+        pdf_dict_put_rect(ctx, pdf_annot_obj(ctx, a), PDF_NAME(RD), rd);
+        pdf_set_annot_rect(ctx, a, ToFzRect(rect));
+    });
 }
 
 // Snapshot the annotation and remember it as the one to delete on paste. A cut
@@ -2263,10 +2296,11 @@ bool CopyAnnotation(Annotation* annot) {
     if (!AnnotationIsLive(annot) || !AnnotationCanBeCopied(annot->type)) {
         return false;
     }
-    ClearAnnotationClipboard();
+    FreeAnnotationClipboard();
     gAnnotClipboard.valid = true;
     gAnnotClipboard.type = annot->type;
     gAnnotClipboard.rect = GetAnnotRect(annot);
+    gAnnotClipboard.rectDiff = GetRectDiff(annot);
     gAnnotClipboard.contents = str::Dup(Contents(annot));
     gAnnotClipboard.iconName = str::Dup(IconName(annot));
     gAnnotClipboard.opacity = Opacity(annot);
@@ -2409,6 +2443,10 @@ Annotation* PasteCopiedAnnotation(EngineBase* engine, int pageNo, PointF topLeft
     }
     if (AnnotationSupportsBorder(clip.type) && clip.borderWidth >= 0) {
         SetBorderWidth(annot, clip.borderWidth);
+    }
+    // after SetBorderWidth: it grows /Rect and /RD by the width change
+    if (useRect) {
+        SetRectAndDiff(annot, newRect, clip.rectDiff);
     }
     if (len(quads) > 0) {
         SetQuadPointsAsRect(annot, quads);

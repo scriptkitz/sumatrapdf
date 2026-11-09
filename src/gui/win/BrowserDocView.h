@@ -32,7 +32,6 @@ class BrowserDocView {
     void SetVisible(bool show);
     bool IsVisible() const;
     void RefreshControllerSurface();
-    HWND GetParentHwnd() const { return hwndParent; }
 
     void NavigateToDataUrl(Str url);
     void GoBack();
@@ -54,6 +53,7 @@ class BrowserDocView {
     void Eval(Str js);
     void SelectAll();
     void CopySelection();
+    bool CapturePng(const Func1<Str>& done);
     LRESULT SendMsg(UINT msg, WPARAM wp, LPARAM lp);
 
   private:

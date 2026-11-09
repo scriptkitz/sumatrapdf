@@ -19,14 +19,20 @@
 import { runNamedTests, runSuiteMain, startSuiteProgress, type NamedTest, type SuiteOptions } from "./util.ts";
 import { setTestWindowLayout } from "./winapi.ts";
 import { beginSharedControlledSession, endSharedControlledSession } from "./win-automation.ts";
+import { testit as customAIUI } from "./custom-ai-ui.ts";
+import { testit as customAI } from "./custom-ai.ts";
 import { testit as lintCommandIds } from "./lint-command-ids.ts";
+import { testit as lintControlIds } from "./lint-control-ids.ts";
+import { testit as lintPostedTasks } from "./lint-posted-tasks.ts";
+import { testit as fontMapCurrent } from "./font-map-current.ts";
+import { testit as issue1909 } from "./issue-1909.ts";
 import { testit as jbig2ResizeOverflow } from "./jbig2-resize-overflow.ts";
+import { testit as issue6468 } from "./issue-6468.ts";
 import { testit as jpegXlPdf } from "./jpeg-xl-pdf.ts";
 import { testit as buildCli } from "./build-cli.ts";
 import { testit as ngEmbedded } from "./ng-embedded.ts";
 import { testit as combiningMarkFirst } from "./combining-mark-first.ts";
-import { testit as parseTipBrackets } from "./parse-tip-brackets.ts";
-import { testit as issue5840 } from "./issue-5840.ts";
+import { testit as appUnitTests } from "./app-unit-tests.ts";
 import { testit as issue5844 } from "./issue-5844.ts";
 import { testit as issue3434 } from "./issue-3434.ts";
 import { testit as cmykImageSave } from "./cmyk-image-save.ts";
@@ -35,11 +41,8 @@ import { testit as issue1809 } from "./issue-1809.ts";
 import { testit as issue4398 } from "./issue-4398.ts";
 import { testit as issue6346 } from "./issue-6346.ts";
 import { testit as issue6348 } from "./issue-6348.ts";
+import { testit as issue750 } from "./issue-750.ts";
 import { testit as issue6039 } from "./issue-6039.ts";
-import { testit as issue5846 } from "./issue-5846.ts";
-import { testit as issue5941 } from "./issue-5941.ts";
-import { testit as issue2447 } from "./issue-2447.ts";
-import { testit as issue476 } from "./issue-476.ts";
 import { testit as issue5875 } from "./issue-5875.ts";
 import { testit as issue3744 } from "./issue-3744.ts";
 import { testit as issue4986 } from "./issue-4986.ts";
@@ -93,7 +96,6 @@ import { testit as issue5642 } from "./issue-5642.ts";
 import { testit as issue5665 } from "./issue-5665.ts";
 import { testit as issue5677 } from "./issue-5677.ts";
 import { testit as issue5681 } from "./issue-5681.ts";
-import { testit as issue1678 } from "./issue-1678.ts";
 import { testit as issue1724 } from "./issue-1724.ts";
 import { testit as issue2239 } from "./issue-2239.ts";
 import { testit as issue1744 } from "./issue-1744.ts";
@@ -117,6 +119,7 @@ import { testit as issue2155 } from "./issue-2155.ts";
 import { testit as issue2254 } from "./issue-2254.ts";
 import { testit as issue1846 } from "./issue-1846.ts";
 import { testit as xmpProperties } from "./xmp-properties.ts";
+import { testit as epubMetadataProperties } from "./epub-metadata-properties.ts";
 import { testit as issue5950 } from "./issue-5950.ts";
 import { testit as issue5993 } from "./issue-5993.ts";
 import { testit as issue5845 } from "./issue-5845.ts";
@@ -133,6 +136,16 @@ import { testit as issue6246 } from "./issue-6246.ts";
 import { testit as issue6247 } from "./issue-6247.ts";
 import { testit as issue6250 } from "./issue-6250.ts";
 import { testit as issue6252 } from "./issue-6252.ts";
+import { testit as issue6429 } from "./issue-6429.ts";
+import { testit as issue6431 } from "./issue-6431.ts";
+import { testit as issue6433 } from "./issue-6433.ts";
+import { testit as issue6434 } from "./issue-6434.ts";
+import { testit as issue6407 } from "./issue-6407.ts";
+import { testit as issue6435 } from "./issue-6435.ts";
+import { testit as issue6437 } from "./issue-6437.ts";
+import { testit as issue6439 } from "./issue-6439.ts";
+import { testit as convertEpubToPdf } from "./convert-epub-to-pdf.ts";
+import { testit as rtf } from "./rtf.ts";
 import { testit as installerDesktopShortcut } from "./installer-desktop-shortcut.ts";
 import { testit as issue4291 } from "./issue-4291.ts";
 import { testit as issue6271 } from "./issue-6271.ts";
@@ -146,10 +159,20 @@ import { testit as textSnippets } from "./text-snippets.ts";
 import { testit as signWithImage } from "./sign-with-image.ts";
 import { testit as alwaysShowSidebar } from "./always-show-sidebar.ts";
 import { testit as ghsaP2ph2rvmQ37m } from "./security-ghsa-p2ph-2rvm-q37m.ts";
+import { testit as ghsa5wm7225j9qcj } from "./security-ghsa-5wm7-225j-9qcj.ts";
+import { testit as issue6364 } from "./issue-6364.ts";
+import { testit as issue6365 } from "./issue-6365.ts";
+import { testit as issue6378 } from "./issue-6378.ts";
+import { testit as issue6380 } from "./issue-6380.ts";
+import { testit as issue6379 } from "./issue-6379.ts";
+import { testit as markdownPathTraversal } from "./markdown-path-traversal.ts";
 import { testit as issue4753 } from "./issue-4753.ts";
 import { testit as issue4055 } from "./issue-4055.ts";
 import { testit as issue2165 } from "./issue-2165.ts";
 import { testit as issue3472 } from "./issue-3472.ts";
+import { testit as pdfDecryptRememberedKey } from "./pdf-decrypt-remembered-key.ts";
+import { testit as pdfToolsEncrypted } from "./pdf-tools-encrypted.ts";
+import { testit as passwordDialogReuseInstance } from "./password-dialog-reuse-instance.ts";
 import { testit as pdfOnlyMenuItems } from "./pdf-only-menu-items.ts";
 import { testit as issue2258 } from "./issue-2258.ts";
 import { testit as issue2737 } from "./issue-2737.ts";
@@ -161,12 +184,19 @@ import { testit as issue6330 } from "./issue-6330.ts";
 import { testit as issue6332 } from "./issue-6332.ts";
 import { testit as issue6339 } from "./issue-6339.ts";
 import { testit as issue1293 } from "./issue-1293.ts";
+import { testit as epubFirstPageImage } from "./epub-first-page-image.ts";
+import { testit as cssInvalidColor } from "./css-invalid-color.ts";
+import { testit as epubPreWraps } from "./epub-pre-wraps.ts";
 import { testit as issue4788 } from "./issue-4788.ts";
 import { testit as issue6359 } from "./issue-6359.ts";
 import { testit as issue6360 } from "./issue-6360.ts";
+import { testit as issue6441 } from "./issue-6441.ts";
+import { testit as issue6442 } from "./issue-6442.ts";
+import { testit as issue6444 } from "./issue-6444.ts";
 import { testit as issue6361 } from "./issue-6361.ts";
 import { testit as issue6362 } from "./issue-6362.ts";
 import { testit as issue6276 } from "./issue-6276.ts";
+import { testit as issue6402 } from "./issue-6402.ts";
 import { testit as issue6279 } from "./issue-6279.ts";
 import { testit as issue6280 } from "./issue-6280.ts";
 import { testit as issue6322 } from "./issue-6322.ts";
@@ -182,6 +212,55 @@ import { testit as issue6088 } from "./issue-6088.ts";
 import { testit as annotContentsClickAway } from "./annot-contents-click-away.ts";
 import { testit as annotColorDropdown } from "./annot-color-dropdown.ts";
 import { testit as inkThickness } from "./ink-thickness.ts";
+import { testit as issue6388 } from "./issue-6388.ts";
+import { testit as issue6385 } from "./issue-6385.ts";
+import { testit as issue6469 } from "./issue-6469.ts";
+import { testit as issue6470 } from "./issue-6470.ts";
+import { testit as issue6472 } from "./issue-6472.ts";
+import { testit as issue6474 } from "./issue-6474.ts";
+import { testit as issue6476 } from "./issue-6476.ts";
+import { testit as issue3271 } from "./issue-3271.ts";
+import { testit as issue6462 } from "./issue-6462.ts";
+import { testit as issue6480 } from "./issue-6480.ts";
+import { testit as issue6481 } from "./issue-6481.ts";
+import { testit as issue6482 } from "./issue-6482.ts";
+import { testit as autoScrollExtras } from "./auto-scroll-extras.ts";
+import { testit as toolbarWrap } from "./toolbar-wrap.ts";
+import { testit as reopenClosedWindow } from "./reopen-closed-window.ts";
+import { testit as tabGroupAutoSync } from "./tab-group-autosync.ts";
+import { testit as replaceImage } from "./replace-image.ts";
+import { testit as readColumns } from "./read-columns.ts";
+import { testit as issue6486 } from "./issue-6486.ts";
+import { testit as issue6487 } from "./issue-6487.ts";
+import { testit as issue6488 } from "./issue-6488.ts";
+import { testit as issue6489 } from "./issue-6489.ts";
+import { testit as issue6490 } from "./issue-6490.ts";
+import { testit as issue6491 } from "./issue-6491.ts";
+import { testit as issue6492 } from "./issue-6492.ts";
+import { testit as issue6493 } from "./issue-6493.ts";
+import { testit as issue6494 } from "./issue-6494.ts";
+import { testit as issue6495 } from "./issue-6495.ts";
+import { testit as issue6496 } from "./issue-6496.ts";
+import { testit as issue1139 } from "./issue-1139.ts";
+import { testit as issue6497 } from "./issue-6497.ts";
+import { testit as issue6221 } from "./issue-6221.ts";
+import { testit as issue6505 } from "./issue-6505.ts";
+import { testit as issue6506 } from "./issue-6506.ts";
+import { testit as copyJoinLines } from "./copy-join-lines.ts";
+import { testit as tabSwitchEndsModes } from "./tab-switch-ends-modes.ts";
+import { testit as scrollbarCaptureLoss } from "./scrollbar-capture-loss.ts";
+import { testit as nextFileSavePrompt } from "./next-file-save-prompt.ts";
+import { testit as backgroundTabReload } from "./background-tab-reload.ts";
+import { testit as sessionRestoreBrokenFile } from "./session-restore-broken-file.ts";
+import { testit as tabSwitchPresentation } from "./tab-switch-presentation.ts";
+import { testit as reloadKeepsFullscreenLayout } from "./reload-keeps-fullscreen-layout.ts";
+import { testit as closeWindowWithDialog } from "./close-window-with-dialog.ts";
+import { testit as captionCaptureLoss } from "./caption-capture-loss.ts";
+import { testit as menuBarArmedDeactivate } from "./menu-bar-armed-deactivate.ts";
+import { testit as issue6509 } from "./issue-6509.ts";
+import { testit as f7EndsPlacement } from "./f7-ends-placement.ts";
+import { testit as findUiOneAtATime } from "./find-ui-one-at-a-time.ts";
+import { testit as issue6477 } from "./issue-6477.ts";
 import { testit as issue6137Contents } from "./issue-6137-contents.ts";
 import { testit as issue6093 } from "./issue-6093.ts";
 import { testit as toolbarHoverDropdown } from "./toolbar-hover-dropdown.ts";
@@ -193,6 +272,8 @@ import { testit as issue6305 } from "./issue-6305.ts";
 import { testit as epubThemeRestyle } from "./epub-theme-restyle.ts";
 import { testit as showChaptersInEbooks } from "./show-chapters-in-ebooks.ts";
 import { testit as embeddedImageAttachment } from "./embedded-image-attachment.ts";
+import { testit as murunEmbeddedFiles } from "./murun-embedded-files.ts";
+import { testit as murunGetArrayIndex } from "./murun-get-array-index.ts";
 import { testit as dragOutAttachmentTab } from "./drag-out-attachment-tab.ts";
 import { testit as ttsEngineCrashRecovery } from "./tts-engine-crash-recovery.ts";
 import { testit as readAloudCloseDuringSpeak } from "./read-aloud-close-during-speak.ts";
@@ -206,6 +287,7 @@ import { testit as formJsThrow } from "./form-js-throw.ts";
 import { testit as closeTabDuringPlacement } from "./close-tab-during-placement.ts";
 import { testit as toggleZoomFailedTab } from "./toggle-zoom-failed-tab.ts";
 import { testit as restoreChmMissingTab } from "./restore-chm-missing-tab.ts";
+import { testit as restoreSessionCloseReentry } from "./restore-session-close-reentry.ts";
 import { testit as issue5943 } from "./issue-5943.ts";
 import { testit as issue6117 } from "./issue-6117.ts";
 import { testit as issue6118 } from "./issue-6118.ts";
@@ -221,7 +303,9 @@ import { testit as issue1438 } from "./issue-1438.ts";
 import { testit as issue1136 } from "./issue-1136.ts";
 import { testit as navigateFilesDeleteSelection } from "./navigate-files-delete-selection.ts";
 import { testit as issue893 } from "./issue-893.ts";
+import { testit as findHistoryAltDown } from "./find-history-alt-down.ts";
 import { testit as issue1699 } from "./issue-1699.ts";
+import { testit as issue3585 } from "./issue-3585.ts";
 import { testit as issue1998 } from "./issue-1998.ts";
 import { testit as issue2199 } from "./issue-2199.ts";
 import { testit as issue906 } from "./issue-906.ts";
@@ -239,6 +323,7 @@ import { testit as issue6232Refresh } from "./issue-6232-refresh.ts";
 import { testit as issue6232PathEdit } from "./issue-6232-path-edit.ts";
 import { testit as issue6234 } from "./issue-6234.ts";
 import { testit as issue6236 } from "./issue-6236.ts";
+import { testit as issue6414 } from "./issue-6414.ts";
 import { testit as issue5817 } from "./issue-5817.ts";
 import { testit as issue6238 } from "./issue-6238.ts";
 import { testit as issue1841 } from "./issue-1841.ts";
@@ -264,6 +349,9 @@ import { testit as issue6048 } from "./issue-6048.ts";
 import { testit as issue6053 } from "./issue-6053.ts";
 import { testit as issue6054 } from "./issue-6054.ts";
 import { testit as favoritesMenu } from "./favorites-menu.ts";
+import { testit as editFavorites } from "./edit-favorites.ts";
+import { testit as tocExpandChapter } from "./toc-expand-chapter.ts";
+import { testit as fileMenuSendByEmail } from "./file-menu-send-by-email.ts";
 import { testit as favoritesTabAfterDocumentClose } from "./favorites-tab-after-document-close.ts";
 import { testit as movePolygonPolylineInk } from "./move-polygon-polyline-ink.ts";
 
@@ -292,6 +380,7 @@ import { testit as issue6111 } from "./issue-6111.ts";
 import { testit as annotListPlacement } from "./annot-list-placement.ts";
 import { testit as exitEditPdfDeselects } from "./exit-edit-pdf-deselects.ts";
 import { testit as freeTextInPlaceEdit } from "./free-text-in-place-edit.ts";
+import { testit as issue6387 } from "./issue-6387.ts";
 import { testit as freeTextEditMatchesRender } from "./free-text-edit-matches-render.ts";
 import { testit as annotMoveableTypes } from "./annot-moveable-types.ts";
 import { testit as stampCaretAnnotationPlacement } from "./stamp-caret-annotation-placement.ts";
@@ -314,7 +403,20 @@ import { testit as sidebarThumbnails } from "./sidebar-thumbnails.ts";
 import { testit as sidebarThumbnailsWheel } from "./sidebar-thumbnails-wheel.ts";
 import { testit as sidebarThumbnailsClose } from "./sidebar-thumbnails-close.ts";
 import { testit as issue6070 } from "./issue-6070.ts";
+import { testit as issue6371 } from "./issue-6371.ts";
+import { testit as issue6372 } from "./issue-6372.ts";
+import { testit as issue5890 } from "./issue-5890.ts";
 import { testit as wheelWhileClosing } from "./wheel-while-closing.ts";
+import { testit as hwheelHome } from "./hwheel-home.ts";
+import { testit as tabMenuClose } from "./tab-menu-close.ts";
+import { testit as chapterNav } from "./chapter-nav.ts";
+import { testit as pageLinksFreshEngine } from "./page-links-fresh-engine.ts";
+import { testit as mouseButtonShortcuts } from "./mouse-button-shortcuts.ts";
+import { testit as issue6483 } from "./issue-6483.ts";
+import { testit as issue6485 } from "./issue-6485.ts";
+import { testit as issue6500 } from "./issue-6500.ts";
+import { testit as fontDownload } from "./font-download.ts";
+import { testit as fontSystemSubstitutes } from "./font-system-substitutes.ts";
 import { testit as printDialogMultiFile } from "./print-dialog-multi-file.ts";
 import { testit as issue6259 } from "./issue-6259.ts";
 import { testit as fullscreenSessionRestore } from "./fullscreen-session-restore.ts";
@@ -332,6 +434,8 @@ import { testit as issue6287 } from "./issue-6287.ts";
 import { testit as issue6340 } from "./issue-6340.ts";
 import { testit as issue6341 } from "./issue-6341.ts";
 import { testit as issue6337 } from "./issue-6337.ts";
+import { testit as issue6367 } from "./issue-6367.ts";
+import { testit as issue6373 } from "./issue-6373.ts";
 import { testit as findFloatSwitchResults } from "./find-float-switch-results.ts";
 import { testit as signCertify } from "./sign-certify.ts";
 import { testit as commandPaletteTheme } from "./command-palette-theme.ts";
@@ -342,6 +446,12 @@ import { testit as issue6107 } from "./issue-6107.ts";
 
 import { testit as issue5968 } from "./issue-5968.ts";
 import { testit as issue5978 } from "./issue-5978.ts";
+import { testit as issue6455 } from "./issue-6455.ts";
+import { testit as issue6459 } from "./issue-6459.ts";
+import { testit as issue6467 } from "./issue-6467.ts";
+import { testit as issue6464 } from "./issue-6464.ts";
+import { testit as issue6502 } from "./issue-6502.ts";
+import { testit as issue6503 } from "./issue-6503.ts";
 import { testit as issue6352 } from "./issue-6352.ts";
 import { testit as issue6354 } from "./issue-6354.ts";
 import { testit as issue6355 } from "./issue-6355.ts";
@@ -356,6 +466,7 @@ import { testit as issue5965 } from "./issue-5965.ts";
 import { testit as issue1315 } from "./issue-1315.ts";
 import { testit as issue5581 } from "./issue-5581.ts";
 import { testit as issue5991 } from "./issue-5991.ts";
+import { testit as issue6422 } from "./issue-6422.ts";
 import { testit as issue6127 } from "./issue-6127.ts";
 import { testit as issue6163 } from "./issue-6163.ts";
 import { testit as issue6166 } from "./issue-6166.ts";
@@ -379,6 +490,18 @@ import { testit as issue5512 } from "./issue-5512.ts";
 import { testit as issue6005 } from "./issue-6005.ts";
 import { testit as issue4655 } from "./issue-4655.ts";
 import { testit as issue4315 } from "./issue-4315.ts";
+import { testit as issue6399 } from "./issue-6399.ts";
+import { testit as issue6400 } from "./issue-6400.ts";
+import { testit as issue6405 } from "./issue-6405.ts";
+import { testit as issue6406 } from "./issue-6406.ts";
+import { testit as issue6409 } from "./issue-6409.ts";
+import { testit as issue6411 } from "./issue-6411.ts";
+import { testit as issue6412 } from "./issue-6412.ts";
+import { testit as issue6420 } from "./issue-6420.ts";
+import { testit as issue6424 } from "./issue-6424.ts";
+import { testit as issue6421 } from "./issue-6421.ts";
+import { testit as issue6328 } from "./issue-6328.ts";
+import { testit as issue5819 } from "./issue-5819.ts";
 import { testit as issue4662 } from "./issue-4662.ts";
 import { testit as issue6013 } from "./issue-6013.ts";
 import { testit as issue6018 } from "./issue-6018.ts";
@@ -395,6 +518,9 @@ import { testit as issue6012 } from "./issue-6012.ts";
 import { testit as issue6080 } from "./issue-6080.ts";
 import { testit as issue6203 } from "./issue-6203.ts";
 import { testit as issue6205 } from "./issue-6205.ts";
+import { testit as advSettingsEnter } from "./adv-settings-enter.ts";
+import { testit as hexView } from "./hex-view.ts";
+import { testit as codexProvider } from "./codex-provider.ts";
 import { testit as advSettingsFreshDefaults } from "./adv-settings-fresh-defaults.ts";
 import { testit as issue6137AdvSettings } from "./issue-6137-adv-settings.ts";
 import { testit as advSettingsHomeReload } from "./adv-settings-home-reload.ts";
@@ -411,12 +537,16 @@ import { testit as issue6135 } from "./issue-6135.ts";
 import { testit as issue6137 } from "./issue-6137.ts";
 import { testit as issue6140 } from "./issue-6140.ts";
 import { testit as issue6142 } from "./issue-6142.ts";
+import { testit as issue6419 } from "./issue-6419.ts";
+import { testit as issue6448 } from "./issue-6448.ts";
 import { testit as issue6143 } from "./issue-6143.ts";
 import { testit as issue6144 } from "./issue-6144.ts";
 import { testit as toolbarTabSwitchPos } from "./toolbar-tab-switch-pos.ts";
 import { testit as facingFitTinyViewport } from "./facing-fit-tiny-viewport.ts";
 import { testit as mdMissingFile } from "./ad-hoc-md-missing-file.ts";
 import { testit as issue6148 } from "./issue-6148.ts";
+import { testit as issue6393 } from "./issue-6393.ts";
+import { testit as issue6397 } from "./issue-6397.ts";
 import { testit as issue6184 } from "./issue-6184.ts";
 import { testit as issue6220 } from "./issue-6220.ts";
 import { testit as sessionRestoreTabState } from "./session-restore-tab-state.ts";
@@ -424,6 +554,9 @@ import { testit as issue6239 } from "./issue-6239.ts";
 import { testit as issue6312 } from "./issue-6312.ts";
 import { testit as toolPoster } from "./tool-poster.ts";
 import { testit as toolMerge } from "./tool-merge.ts";
+import { testit as toolGrep } from "./tool-grep.ts";
+import { testit as insertImageReload } from "./insert-image-reload.ts";
+import { testit as appdataInvalidDir } from "./appdata-invalid-dir.ts";
 import { testit as mergeStructParents } from "./merge-struct-parents.ts";
 import { testit as reuseInstanceFullscreen } from "./reuse-instance-fullscreen.ts";
 import { testit as attachmentOpenExternal } from "./attachment-open-external.ts";
@@ -448,6 +581,29 @@ export const tests: NamedTest[] = [
   // first: it drives the home page, whose thumbnail selection follows the
   // mouse, so it is the one test that cares what the machine was doing before
   ["issue-5978", issue5978],
+  ["issue-6412", issue6412],
+  ["sidebar-thumbnails", sidebarThumbnails],
+  ["issue-1909", issue1909],
+  ["issue-6474", issue6474],
+  ["issue-6476", issue6476],
+  ["issue-6477", issue6477],
+  ["password-dialog-reuse-instance", passwordDialogReuseInstance],
+  ["issue-6269", issue6269],
+  ["issue-6385", issue6385],
+  ["issue-6240", issue6240],
+  ["issue-4788", issue4788],
+  ["issue-6373", issue6373],
+  ["issue-6468", issue6468],
+  ["issue-6230", issue6230],
+  ["issue-6360", issue6360],
+  ["issue-5819", issue5819],
+  ["issue-6252", issue6252],
+  ["ng-embedded", ngEmbedded],
+  ["issue-6431", issue6431],
+  ["issue-5924", issue5924],
+  ["issue-6388", issue6388],
+  ["pdf-script", pdfScript],
+  ["annotation clipboard tests", annotationClipboardTests],
   ["issue-6352", issue6352],
   ["issue-6354", issue6354],
   ["issue-6355", issue6355],
@@ -461,18 +617,26 @@ export const tests: NamedTest[] = [
   ["selection-toolbar-move", selectionToolbarMove],
   ["issue-6232-path-edit", issue6232PathEdit],
   ["issue-6070", issue6070],
-  ["annotation clipboard tests", annotationClipboardTests],
-  ["issue-6252", issue6252],
+  ["issue-6371", issue6371],
+  ["issue-6372", issue6372],
+  ["issue-5890", issue5890],
+  ["issue-6429", issue6429],
+  ["issue-6433", issue6433],
+  ["issue-6434", issue6434],
+  ["issue-6407", issue6407],
+  ["issue-6435", issue6435],
+  ["issue-6437", issue6437],
+  ["issue-6439", issue6439],
+  ["convert-epub-to-pdf", convertEpubToPdf],
+  ["rtf", rtf],
   ["issue-6239", issue6239],
   ["issue-3755", issue3755],
-  ["pdf-script", pdfScript],
   ["pdf-save-dedup-stream", pdfSaveDedupStream],
   ["issue-5446", issue5446],
   ["annot-color-dropdown", annotColorDropdown],
   ["free-text-edit-toolbar", freeTextEditToolbar],
   ["free-text-edit-zoom", freeTextEditZoom],
   ["pdf-edit-toolbar-interaction", pdfEditToolbarInteraction],
-  ["sidebar-thumbnails", sidebarThumbnails],
   ["issue-6144", issue6144],
   ["sidebar-thumbnails-wheel", sidebarThumbnailsWheel],
   ["issue-6305", issue6305],
@@ -486,7 +650,7 @@ export const tests: NamedTest[] = [
   ["issue-2423", issue2423],
   ["jpeg-xl-pdf", jpegXlPdf],
   ["issue-6276", issue6276],
-  ["issue-6269", issue6269],
+  ["issue-6402", issue6402],
   ["toolbar-hover-dropdown", toolbarHoverDropdown],
   ["session-restore-tab-state", sessionRestoreTabState],
   ["exit-edit-pdf-deselects", exitEditPdfDeselects],
@@ -535,13 +699,19 @@ export const tests: NamedTest[] = [
   ["issue-6140", issue6140],
   ["ad-hoc-md-missing-file", mdMissingFile],
   ["issue-6142", issue6142],
+  ["issue-6419", issue6419],
+  ["issue-6448", issue6448],
   ["issue-6148", issue6148],
+  ["issue-6393", issue6393],
+  ["issue-6397", issue6397],
   ["issue-6143", issue6143],
   ["issue-5993", issue5993],
   ["issue-2629", issue2629],
   ["issue-6135", issue6135],
   ["issue-4276", issue4276],
   ["embedded-image-attachment", embeddedImageAttachment],
+  ["murun-embedded-files", murunEmbeddedFiles],
+  ["murun-get-array-index", murunGetArrayIndex],
   ["drag-out-attachment-tab", dragOutAttachmentTab],
   ["tts-engine-crash-recovery", ttsEngineCrashRecovery],
   ["read-aloud-close-during-speak", readAloudCloseDuringSpeak],
@@ -553,17 +723,20 @@ export const tests: NamedTest[] = [
   ["close-tab-during-placement", closeTabDuringPlacement],
   ["toggle-zoom-failed-tab", toggleZoomFailedTab],
   ["restore-chm-missing-tab", restoreChmMissingTab],
+  ["restore-session-close-reentry", restoreSessionCloseReentry],
   ["issue-4705", issue4705],
   ["toc-tree-sent-click", tocTreeSentClick],
   ["issue-5956", issue5956],
   ["issue-6137", issue6137],
   ["free-text-edit-matches-render", freeTextEditMatchesRender],
   ["free-text-in-place-edit", freeTextInPlaceEdit],
+  ["issue-6387", issue6387],
   ["issue-6103", issue6103],
   ["issue-6062", issue6062],
   ["issue-6101", issue6101],
   ["issue-5907", issue5907],
   ["issue-893", issue893],
+  ["find-history-alt-down", findHistoryAltDown],
   ["cmyk-image-save", cmykImageSave],
   ["issue-6214", issue6214],
   ["issue-5868", issue5868],
@@ -573,24 +746,22 @@ export const tests: NamedTest[] = [
   ["issue-4398", issue4398],
   ["issue-6346", issue6346],
   ["issue-6348", issue6348],
+  ["issue-750", issue750],
   ["issue-5964", issue5964],
   ["issue-6013", issue6013],
   ["issue-5989", issue5989],
 
   // --- no Sumatra process -------------------------------------------------
   ["lint-command-ids", lintCommandIds],
+  ["lint-control-ids", lintControlIds],
+  ["lint-posted-tasks", lintPostedTasks],
+  ["font-map-current", fontMapCurrent],
   ["build-cli", buildCli],
-  ["ng-embedded", ngEmbedded],
-  ["parse-tip-brackets", parseTipBrackets],
+  ["app-unit-tests", appUnitTests],
   ["combining-mark-first", combiningMarkFirst],
-  ["issue-5840", issue5840],
   ["issue-5844", issue5844],
   ["issue-3434", issue3434],
   ["issue-1809", issue1809],
-  ["issue-5846", issue5846],
-  ["issue-5941", issue5941],
-  ["issue-2447", issue2447],
-  ["issue-476", issue476],
   ["issue-5875", issue5875],
 
   // --- default session: -for-testing + quadrant window + -dbg-control ----
@@ -615,11 +786,11 @@ export const tests: NamedTest[] = [
   ["issue-1315", issue1315],
   ["issue-5581", issue5581],
   ["issue-5991", issue5991],
+  ["issue-6422", issue6422],
   ["issue-6127", issue6127],
   ["issue-6163", issue6163],
   ["issue-4973", issue4973],
   ["issue-2083", issue2083],
-  ["issue-6240", issue6240],
   ["issue-6241", issue6241],
   ["issue-5329", issue5329],
   ["issue-6288", issue6288],
@@ -630,7 +801,6 @@ export const tests: NamedTest[] = [
   ["issue-4684", issue4684],
   ["issue-6302", issue6302],
   ["issue-5922", issue5922],
-  ["issue-5924", issue5924],
   ["issue-5926", issue5926],
   ["issue-1914", issue1914],
   ["issue-1198", issue1198],
@@ -664,7 +834,6 @@ export const tests: NamedTest[] = [
   ["issue-5665", issue5665],
   ["issue-5677", issue5677],
   ["issue-5681", issue5681],
-  ["issue-1678", issue1678],
   ["issue-1724", issue1724],
   ["issue-2239", issue2239],
   ["issue-1744", issue1744],
@@ -679,14 +848,25 @@ export const tests: NamedTest[] = [
   ["issue-5317", issue5317],
   ["issue-5694", issue5694],
   ["issue-1699", issue1699],
+  ["issue-3585", issue3585],
   ["issue-2155", issue2155],
   ["issue-2254", issue2254],
   ["issue-1846", issue1846],
   ["xmp-properties", xmpProperties],
+  ["epub-metadata-properties", epubMetadataProperties],
   ["issue-5950", issue5950],
   ["issue-3472", issue3472],
   ["pdf-only-menu-items", pdfOnlyMenuItems],
+  ["pdf-tools-encrypted", pdfToolsEncrypted],
+  ["pdf-decrypt-remembered-key", pdfDecryptRememberedKey],
   ["security-ghsa-p2ph-2rvm-q37m", ghsaP2ph2rvmQ37m],
+  ["security-ghsa-5wm7-225j-9qcj", ghsa5wm7225j9qcj],
+  ["issue-6364", issue6364],
+  ["issue-6365", issue6365],
+  ["issue-6378", issue6378],
+  ["issue-6379", issue6379],
+  ["issue-6380", issue6380],
+  ["markdown-path-traversal", markdownPathTraversal],
   ["issue-5780", issue5780],
   ["issue-5845", issue5845],
   ["issue-5963", issue5963],
@@ -694,6 +874,9 @@ export const tests: NamedTest[] = [
 
   // --- isolated session: -appdata, saveSettings, or own window placement -
   ["favorites-menu", favoritesMenu],
+  ["edit-favorites", editFavorites],
+  ["toc-expand-chapter", tocExpandChapter],
+  ["file-menu-send-by-email", fileMenuSendByEmail],
   ["favorites-tab-after-document-close", favoritesTabAfterDocumentClose],
   ["issue-6045", issue6045],
   ["issue-3744", issue3744],
@@ -714,9 +897,10 @@ export const tests: NamedTest[] = [
   ["issue-6332", issue6332],
   ["issue-6339", issue6339],
   ["issue-1293", issue1293],
-  ["issue-4788", issue4788],
+  ["epub-first-page-image", epubFirstPageImage],
+  ["css-invalid-color", cssInvalidColor],
+  ["epub-pre-wraps", epubPreWraps],
   ["issue-6359", issue6359],
-  ["issue-6360", issue6360],
   ["issue-6361", issue6361],
   ["issue-6362", issue6362],
   ["issue-6280", issue6280],
@@ -757,12 +941,15 @@ export const tests: NamedTest[] = [
   ["issue-5850", issue5850],
   ["issue-6028", issue6028],
   ["issue-6228", issue6228],
-  ["issue-6230", issue6230],
+  ["issue-6469", issue6469],
+  ["issue-6470", issue6470],
+  ["issue-6472", issue6472],
   ["issue-6232", issue6232],
   ["issue-6232-filter", issue6232Filter],
   ["issue-6232-refresh", issue6232Refresh],
   ["issue-6234", issue6234],
   ["issue-6236", issue6236],
+  ["issue-6414", issue6414],
   ["issue-5817", issue5817],
   ["issue-6238", issue6238],
   ["issue-1841", issue1841],
@@ -782,6 +969,15 @@ export const tests: NamedTest[] = [
   ["command-palette-thumbnails", commandPaletteThumbnails],
   ["sidebar-thumbnails-close", sidebarThumbnailsClose],
   ["wheel-while-closing", wheelWhileClosing],
+  ["hwheel-home", hwheelHome],
+  ["tab-menu-close", tabMenuClose],
+  ["chapter-nav", chapterNav],
+  ["mouse-button-shortcuts", mouseButtonShortcuts],
+  ["issue-6483", issue6483],
+  ["issue-6485", issue6485],
+  ["issue-6500", issue6500],
+  ["font-download", fontDownload],
+  ["font-system-substitutes", fontSystemSubstitutes],
   ["print-dialog-multi-file", printDialogMultiFile],
   ["issue-6259", issue6259],
   ["fullscreen-session-restore", fullscreenSessionRestore],
@@ -798,6 +994,7 @@ export const tests: NamedTest[] = [
   ["issue-6340", issue6340],
   ["issue-6341", issue6341],
   ["issue-6337", issue6337],
+  ["issue-6367", issue6367],
   ["find-float-switch-results", findFloatSwitchResults],
   ["command-palette-theme", commandPaletteTheme],
   ["command-palette-delete-tab", commandPaletteDeleteTab],
@@ -821,6 +1018,16 @@ export const tests: NamedTest[] = [
   ["issue-6005", issue6005],
   ["issue-4655", issue4655],
   ["issue-4315", issue4315],
+  ["issue-6399", issue6399],
+  ["issue-6400", issue6400],
+  ["issue-6405", issue6405],
+  ["issue-6406", issue6406],
+  ["issue-6409", issue6409],
+  ["issue-6411", issue6411],
+  ["issue-6420", issue6420],
+  ["issue-6424", issue6424],
+  ["issue-6421", issue6421],
+  ["issue-6328", issue6328],
   ["issue-4662", issue4662],
   ["issue-6018", issue6018],
   ["selection-toolbar-stays", selectionToolbarStays],
@@ -835,6 +1042,8 @@ export const tests: NamedTest[] = [
   ["issue-6080", issue6080],
   ["issue-6203", issue6203],
   ["issue-6205", issue6205],
+  ["adv-settings-enter", advSettingsEnter],
+  ["hex-view", hexView],
   ["adv-settings-fresh-defaults", advSettingsFreshDefaults],
   ["issue-6137-adv-settings", issue6137AdvSettings],
   ["adv-settings-home-reload", advSettingsHomeReload],
@@ -852,12 +1061,69 @@ export const tests: NamedTest[] = [
   ["issue-6220", issue6220],
   ["tool-poster", toolPoster],
   ["tool-merge", toolMerge],
+  ["tool-grep", toolGrep],
+  ["insert-image-reload", insertImageReload],
+  ["appdata-invalid-dir", appdataInvalidDir],
   ["merge-struct-parents", mergeStructParents],
   ["reuse-instance-fullscreen", reuseInstanceFullscreen],
   ["attachment-open-external", attachmentOpenExternal],
   ["cbr-network-unrar", cbrNetworkUnrar],
   ["file-link-no-dest", fileLinkNoDest],
   ["control-pipe-busy", controlPipeBusy],
+  ["issue-6441", issue6441],
+  ["issue-6442", issue6442],
+  ["issue-6444", issue6444],
+  ["issue-6455", issue6455],
+  ["issue-6459", issue6459],
+  ["issue-6467", issue6467],
+  ["issue-6464", issue6464],
+  ["issue-6502", issue6502],
+  ["issue-6503", issue6503],
+  ["issue-3271", issue3271],
+  ["issue-6462", issue6462],
+  ["issue-6480", issue6480],
+  ["issue-6481", issue6481],
+  ["issue-6482", issue6482],
+  ["auto-scroll-extras", autoScrollExtras],
+  ["toolbar-wrap", toolbarWrap],
+  ["reopen-closed-window", reopenClosedWindow],
+  ["tab-group-autosync", tabGroupAutoSync],
+  ["replace-image", replaceImage],
+  ["read-columns", readColumns],
+  ["issue-6486", issue6486],
+  ["issue-6487", issue6487],
+  ["issue-6488", issue6488],
+  ["issue-6489", issue6489],
+  ["issue-6490", issue6490],
+  ["issue-6491", issue6491],
+  ["issue-6492", issue6492],
+  ["issue-6493", issue6493],
+  ["issue-6494", issue6494],
+  ["issue-6495", issue6495],
+  ["issue-6496", issue6496],
+  ["issue-1139", issue1139],
+  ["issue-6497", issue6497],
+  ["issue-6221", issue6221],
+  ["issue-6505", issue6505],
+  ["issue-6506", issue6506],
+  ["copy-join-lines", copyJoinLines],
+  ["tab-switch-ends-modes", tabSwitchEndsModes],
+  ["scrollbar-capture-loss", scrollbarCaptureLoss],
+  ["next-file-save-prompt", nextFileSavePrompt],
+  ["background-tab-reload", backgroundTabReload],
+  ["session-restore-broken-file", sessionRestoreBrokenFile],
+  ["tab-switch-presentation", tabSwitchPresentation],
+  ["reload-keeps-fullscreen-layout", reloadKeepsFullscreenLayout],
+  ["close-window-with-dialog", closeWindowWithDialog],
+  ["caption-capture-loss", captionCaptureLoss],
+  ["menu-bar-armed-deactivate", menuBarArmedDeactivate],
+  ["issue-6509", issue6509],
+  ["f7-ends-placement", f7EndsPlacement],
+  ["find-ui-one-at-a-time", findUiOneAtATime],
+  ["codex-provider", codexProvider],
+  ["custom-ai", customAI],
+  ["custom-ai-ui", customAIUI],
+  ["page-links-fresh-engine", pageLinksFreshEngine],
 ];
 
 export async function testit(opts?: SuiteOptions): Promise<void> {

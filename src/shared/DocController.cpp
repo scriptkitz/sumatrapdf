@@ -11,6 +11,13 @@
 #include "PagePosition.h"
 #include "DocController.h"
 
+// lets the app drop raw pointers it keeps to a controller (e.g. for DDE)
+Func1<DocController*> gOnDocControllerDestroyed;
+
+DocController::~DocController() {
+    gOnDocControllerDestroyed.Call(this);
+}
+
 Location DocController::CurrentLocation() {
     return LocFromPageNo(CurrentPageNo());
 }
@@ -188,7 +195,8 @@ void BrowserDocController::SetZoomVirtual(float zoom, Point*) {
     if (zoom > 0) {
         zoom = limitValue(zoom, kZoomMin, kZoomMax);
     }
-    if (!IsValidZoom(zoom)) {
+    // fit modes (kZoomFitPage etc.) are negative and mean nothing to a browser
+    if (zoom <= 0 || !IsValidZoom(zoom)) {
         zoom = 100.0f;
     }
     BrowserViewSetZoomPercent(docView, (int)zoom);
@@ -399,6 +407,14 @@ Str BrowserDocController::CacheData(Str url, Str data) {
     return entry->data;
 }
 
+// urls the browser view was served, for tests
+void BrowserDocController::GetCachedUrls(StrVec& urls) {
+    ScopedMutex scope(&docAccess);
+    for (CacheEntry* entry : dataCache) {
+        urls.Append(entry->url);
+    }
+}
+
 void BrowserDocController::ClearDataCache() {
     DeleteVecMembers(dataCache);
     VecReset(dataCache);
@@ -452,13 +468,6 @@ void BrowserDocController::SaveHtmlScrollPosForUrl(Str url, PointF pos) {
     }
     htmlScrollUrls.Append(plainUrl);
     VecAppend(htmlScrollPositions, pos);
-}
-
-bool BrowserDocController::GetSavedHtmlScrollPosForPage(int pageNo, PointF* pos) const {
-    if (!pos || !ValidPageNo(pageNo)) {
-        return false;
-    }
-    return GetSavedHtmlScrollPosForUrl(ScrollUrlForPageTemp(pageNo), pos);
 }
 
 bool BrowserDocController::GetSavedHtmlScrollPosForUrl(Str url, PointF* pos) const {

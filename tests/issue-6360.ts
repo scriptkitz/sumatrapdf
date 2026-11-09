@@ -10,9 +10,14 @@ import { ControlClient, ControlCommand } from "./control.ts";
 import { assemblePdf, cmdId, runStandalone, tmpPath, USE_NG } from "./util.ts";
 import {
   clientToScreen,
+  clipboardSeqNo,
   emptyClipboard,
+  enumWindows,
+  getClassName,
   getClientRect,
   getClipboardDibInfo,
+  holdClipboard,
+  isWindowVisible,
   postMessage,
   sleep,
   VK_ESCAPE,
@@ -29,6 +34,7 @@ import {
 
 const IMG_DX = 4;
 const IMG_DY = 4;
+const kHoldMs = 1000;
 
 // one page that is mostly one 4x4 image of red and blue pixels
 function makePdf(): string {
@@ -44,6 +50,17 @@ function makePdf(): string {
     `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
     `<< /Type /XObject /Subtype /Image /Width ${IMG_DX} /Height ${IMG_DY} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length ${hex.length + 1} >>\nstream\n${hex}>\nendstream`,
   ]);
+}
+
+function visibleMenuCount(): number {
+  let n = 0;
+  enumWindows((h) => {
+    if (getClassName(h) === "#32768" && isWindowVisible(h)) {
+      n++;
+    }
+    return true;
+  });
+  return n;
 }
 
 async function uiState(client: ControlClient): Promise<string> {
@@ -82,7 +99,13 @@ async function copyImageFromMenu(client: ControlClient, frame: number): Promise<
   }
   // "Selected &Image", then "C&opy To Clipboard"
   postMessage(popup, WM_CHAR, "i".charCodeAt(0), 0);
-  await sleep(150);
+  const deadline = Date.now() + 3000;
+  while (visibleMenuCount() < 2) {
+    if (Date.now() > deadline) {
+      throw new Error("issue-6360: Selected Image submenu did not open");
+    }
+    await sleep(40);
+  }
   postMessage(popup, WM_CHAR, "o".charCodeAt(0), 0);
 }
 
@@ -90,13 +113,27 @@ export async function testit(): Promise<void> {
   const pdf = tmpPath("issue-6360.pdf");
   writeFileSync(pdf, makePdf(), "latin1");
   emptyClipboard();
+  const seqNo = clipboardSeqNo();
 
   const { proc, client, frame } = await launchControlled(["-view", "single page", "-zoom", "fit page", pdf]);
   try {
     await client.waitForRenderIdle();
+    // a clipboard listener holding the clipboard must delay the copy, not drop it
+    const held = holdClipboard(kHoldMs);
     await copyImageFromMenu(client, frame);
+    if (!(await held)) {
+      throw new Error("issue-6360: could not open the clipboard");
+    }
 
-    const deadline = Date.now() + 3000;
+    // opening the clipboard while the app copies would make its OpenClipboard fail
+    const deadline = Date.now() + 5000;
+    while (clipboardSeqNo() === seqNo && Date.now() < deadline) {
+      await sleep(50);
+    }
+    if (clipboardSeqNo() === seqNo) {
+      throw new Error("issue-6360: Copy To Clipboard did not update the clipboard");
+    }
+    await sleep(200);
     let dib = getClipboardDibInfo();
     while (!dib && Date.now() < deadline) {
       await sleep(100);

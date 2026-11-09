@@ -3,6 +3,7 @@
 
 struct AnnotCreateArgs;
 struct CustomCommand;
+struct IPageElement;
 enum class FileType : u8;
 
 #include "OverlayScrollbar.h"
@@ -33,6 +34,13 @@ constexpr int kRepaintMessageDelayInMs = 1000;
 
 constexpr int kAutoReloadTimerID = 5;
 
+// polls the mouse for the floating sidebar (SidebarAutoHide)
+constexpr UINT_PTR kSidebarOverlayTimerID = 18;
+enum class SidebarOverlayUpdate {
+    Layout,
+    Mouse
+};
+
 // debounce: coalesce bursts of file-change notifications (a single save can
 // fire several) into one reload. SetTimer() with the same id resets it, so the
 // reload only happens once the file has been quiet for this long (#5690).
@@ -50,6 +58,8 @@ struct FileHistory;
 struct MainWindow;
 extern Func1<MainWindow*> gAfterLayout;
 extern Func0 gOnSessionRestored;
+void ShowWinScrollBar(HWND hwnd, int bar, BOOL show);
+void CancelDrag(MainWindow* win);
 void NotifySessionRestoreFinished();
 bool IsSessionRestoreFinished();
 bool HasPendingDocumentLoads();
@@ -57,6 +67,8 @@ bool AreLoadThreadsActive();
 // tells the frame's virtual tree which splitters exist (they are created
 // with their panes)
 void FrameSyncSplitters(MainWindow*);
+void UpdateSidebarOverlay(MainWindow*, SidebarOverlayUpdate);
+void SetSidebarTestCursor(Point pt);
 void SetAnnotCreateArgs(AnnotCreateArgs&, CustomCommand*);
 void BeginPdfEditOperation(MainWindow*, const char* name);
 void EndPdfEditOperation(MainWindow*);
@@ -96,6 +108,7 @@ void CrashHandlerSetSettings(Str settings);
 void InitializePolicies(bool restrict);
 bool HasPermission(Perm permission);
 bool CanAccessDisk();
+TempStr AskForFolderTemp(HWND owner, Str title, Str startDir);
 bool AnnotationsAreDisabled();
 bool IsUIRtl();
 bool SumatraLaunchBrowser(Str url);
@@ -105,6 +118,8 @@ bool OpenFileExternally(Str path);
 void CloseCurrentTab(MainWindow* win, bool quitIfLast);
 void CloseTab(WindowTab* tab, bool quitIfLast);
 bool MaybeSaveAnnotations(WindowTab* tab);
+bool SaveAnnotationsToExistingFile(WindowTab*);
+bool SaveAnnotationsToMaybeNewPdfFile(WindowTab*);
 enum class UnsavedChangesAction {
     Discard,
     SaveExisting,
@@ -112,7 +127,8 @@ enum class UnsavedChangesAction {
 };
 bool ResolveUnsavedChanges(WindowTab* tab, UnsavedChangesAction action, Str newPath = {});
 void DeleteFileFromDiskAndHistory(Str path);
-WindowTab* FindTabByFilePath(Str path);
+WindowTab* FindTabByFilePath(Str path, MainWindow* limitWin = nullptr);
+WindowTab* FindTabInWindow(Str path, MainWindow* win);
 // the tab that currently owns this controller, null if it is no longer shown
 WindowTab* FindTabByController(DocController*);
 bool CanCloseWindow(MainWindow* win);
@@ -150,7 +166,6 @@ constexpr int kToolbarHide = 1;
 constexpr int kToolbarOverlay = 2;
 extern SeqStrings gToolbarModeNames;
 int ToolbarModeFromPrefs();
-bool ToolbarModeIsOverlay();
 bool ToolbarModeIsHidden();
 void SetToolbarMode(int mode);
 int FullscreenToolbarModeFromPrefs();
@@ -185,13 +200,12 @@ constexpr u32 kUiPanelsDrag = 0x40;   // live drag of the splitter between the s
 
 void ScheduleUiUpdate(MainWindow* win, u32 flags = kUiRelayout, int sidebarDx = -1);
 void DuplicateTabInNewWindow(WindowTab* tab);
+void DuplicateTabInNewTab(WindowTab* tab);
 void CopyFilePath(WindowTab*);
 void CopyLocationToClipboard(WindowTab*);
 
 MainWindow* FindMainWindowByFile(Str file, bool focusTab, MainWindow* limitWin = nullptr);
 MainWindow* FindMainWindowBySyncFile(Str path, bool focusTab);
-WindowTab* FindTabByFile(Str file, MainWindow* limitWin = nullptr);
-WindowTab* FindTabByFilePath(Str path, MainWindow* limitWin);
 void ExecuteCmd(MainWindow* win, int cmdId);
 void OpenNextPrevFileInFolder(MainWindow* win, bool forward, Str pathToDelete = {});
 void SelectTabInWindow(WindowTab*);
@@ -319,6 +333,9 @@ void SwitchToDisplayMode(MainWindow* win, DisplayMode displayMode, bool keepCont
 void OnDocumentVerticalScrollIntent(MainWindow* win, bool down);
 void DismissNextFileScrollHint(MainWindow* win);
 void MainWindowRerender(MainWindow* win, bool includeNonClientArea = false);
+void ReplaceImageFromFile(MainWindow* win, IPageElement* imageEl);
+void EditImageExternally(MainWindow* win, IPageElement* imageEl);
+TempStr TestImageReplace(MainWindow* win, Str action, int pageNo, int imageIdx, Str path);
 void RerenderTabPage(WindowTab*, int pageNo);
 void GetFrameNcStrips(MainWindow*, Vec<Rect>& out);
 EngineBase* CreatePdfEngineForDialog(Str path, HWND hwnd);
@@ -332,3 +349,5 @@ void ShowFileInFolder(MainWindow* win, Str path);
 void SmartZoom(MainWindow* win, float factor, Point* pt, bool smartZoom);
 TempStr GetSumatraDataDirTemp();
 TempStr GetSumatraBuildSpecificDirTemp();
+
+extern Kind kNotifTemporaryFile;

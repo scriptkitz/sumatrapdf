@@ -33,6 +33,7 @@
 #include "FileHistory.h"
 #include "SumatraPDF.h"
 #if !defined(SUMATRA_NG)
+#include "AIChatTypes.h"
 #include "WindowTab.h"
 #include "MainWindow.h"
 #include "DisplayModel.h"
@@ -69,6 +70,7 @@
 #include "GlobalHotkeys.h"
 #include "PagePosition.h"
 #include "CachedObjects.h"
+#include "AppHelpersCommon.h"
 #endif
 #include "AppSettings.h"
 void ReloadSettingsUpdateWindows(bool showToolbarBefore);
@@ -97,31 +99,6 @@ static bool IsLastSavedPrefs(Str s) {
 static void RememberLastSavedPrefs(Str s) {
     str::ReplaceWithCopy(&gLastSavedPrefs, s);
 }
-
-#if !defined(SUMATRA_NG)
-static bool ApplyReadAloudVoiceFromSettings() {
-    if (!gSettings) {
-        return false;
-    }
-
-    float speed = gSettings->readAloudSpeed;
-    TtsSetSpeed(speed > 0 ? speed : 1.0f);
-
-    Str voiceId = gSettings->readAloudVoiceId;
-    if (len(voiceId) == 0) {
-        TtsSetVoiceById(StrL(""));
-        return false;
-    }
-
-    if (!TtsSetVoiceById(voiceId)) {
-        logf("ApplyReadAloudVoiceFromSettings: voice '%s' not available, using system default\n", voiceId);
-        str::ReplaceWithCopy(&gSettings->readAloudVoiceId, Str{});
-        TtsSetVoiceById(StrL(""));
-        return true;
-    }
-    return false;
-}
-#endif
 
 #if !defined(SUMATRA_NG)
 // SumatraPDF.cpp
@@ -496,7 +473,7 @@ static void UpdateCrashHandlerSettings() {
     Vec<FileState*> empty;
     Vec<FileState*>* saved = gSettings->fileStates;
     gSettings->fileStates = &empty;
-    Str d = SerializeSettings(gSettings, {});
+    Str d = SerializeSettings(gSettings, {}, SerializeOpt::NoSecrets);
     gSettings->fileStates = saved;
     CrashHandlerSetSettings(d);
     str::Free(d);
@@ -535,6 +512,8 @@ static SessionData* CloneSessionData(const SessionData* src) {
 // not-yet-loaded (lazy) tabs, kept mirroring the live session by
 // SyncInitialSessionData() so it never carries closed-window entries.
 Vec<SessionData*>* gInitialSessionData = nullptr;
+// bumped when gInitialSessionData is rebuilt, freeing its SessionData
+int gInitialSessionDataGen = 0;
 
 #if defined(SUMATRA_NG)
 // ng: orig's SaveSettings() calls UpdateTabFileDisplayStateForTab() for every
@@ -544,63 +523,6 @@ Vec<SessionData*>* gInitialSessionData = nullptr;
 // src/SessionState.cpp has orig's code.
 void (*gRememberSessionStateFn)() = nullptr;
 #else
-// find the saved state for a lazy tab by file path. Because gInitialSessionData
-// is kept in sync with the live session, this never matches a closed window;
-// per-tab disambiguation (e.g. same file in two windows) comes from the more
-// reliable tab->tabState, which RememberSessionState prefers.
-static TabState* FindSessionTabState(Str fp) {
-    if (!gInitialSessionData) {
-        return nullptr;
-    }
-    for (SessionData* psd : *gInitialSessionData) {
-        for (TabState* pts : *psd->tabStates) {
-            if (str::Eq(pts->filePath, fp)) {
-                return pts;
-            }
-        }
-    }
-    return nullptr;
-}
-
-// lazy tabs borrow tab->tabState from gInitialSessionData. After we replace that
-// snapshot, repoint those pointers so the next SaveSettings() does not clone freed
-// TabState objects
-static void RefreshLazyTabStatePointers() {
-    int sdIdx = 0;
-    for (MainWindow* win : gWindows) {
-        bool hasFileTab = false;
-        for (WindowTab* tab : win->Tabs()) {
-            if (tab->filePath) {
-                hasFileTab = true;
-                break;
-            }
-        }
-        if (!hasFileTab) {
-            continue;
-        }
-        SessionData* sd = nullptr;
-        if (gInitialSessionData && sdIdx < len(*gInitialSessionData)) {
-            sd = (*gInitialSessionData)[sdIdx++];
-        }
-        int tsIdx = 0;
-        for (WindowTab* tab : win->Tabs()) {
-            if (len(tab->filePath) == 0) {
-                continue;
-            }
-            TabState* ts = nullptr;
-            if (sd && tsIdx < len(*sd->tabStates)) {
-                ts = (*sd->tabStates)[tsIdx];
-            }
-            tsIdx++;
-            if (!tab->ctrl && tab->tabState) {
-                // null when the new snapshot has nothing to borrow: the old one
-                // was just freed and must not be left dangling
-                tab->tabState = ts;
-            }
-        }
-    }
-}
-
 // keep gInitialSessionData mirroring the just-saved live session, so re-saving
 // not-yet-loaded tabs never feeds stale state from a closed window back into the
 // saved session (fixes #5668). Call after RememberSessionState().
@@ -609,6 +531,7 @@ static void SyncInitialSessionData() {
         return;
     }
     FreeSessionDataVec(gInitialSessionData);
+    gInitialSessionDataGen++;
     for (SessionData* sd : *gSettings->sessionData) {
         VecAppend(*gInitialSessionData, CloneSessionData(sd));
     }
@@ -631,8 +554,8 @@ static void RememberSessionState() {
         }
         SessionData* windowState = NewSessionData();
         for (WindowTab* tab : win->Tabs()) {
-            if (len(tab->filePath) == 0) {
-                // home page tab
+            if (len(tab->filePath) == 0 || tab->IsHexTab()) {
+                // home page or hex view tab
                 continue;
             }
             Str fp = tab->filePath;
@@ -671,7 +594,7 @@ static void RememberSessionState() {
         int selectedDocOrdinal = 1;
         WindowTab* cur = win->CurrentTab();
         for (WindowTab* tab : win->Tabs()) {
-            if (tab->IsAboutTab() || len(tab->filePath) == 0) {
+            if (tab->IsAboutTab() || tab->IsHexTab() || len(tab->filePath) == 0) {
                 continue;
             }
             docOrdinal++;
@@ -734,6 +657,7 @@ static bool SaveSettings(bool force) {
 #if !defined(SUMATRA_NG)
     RememberSessionState();
     SyncInitialSessionData();
+    SyncTabGroups();
 #endif
 
     // remove entries which should (no longer) be remembered
@@ -760,7 +684,7 @@ static bool SaveSettings(bool force) {
     // while these bytes still match the last in-memory snapshot
     bool missing = !file::Exists(path);
     TempStr prevPrefs = file::ReadFileWithArena(path, GetTempArena());
-    Str prefs = SerializeSettings(gSettings, prevPrefs);
+    Str prefs = SerializeSettings(gSettings, prevPrefs, SerializeOpt::All);
     AutoCall freePrefs((void (*)(Str))str::Free, prefs);
     ReportIf(len(prefs) == 0);
     if (len(prefs) == 0) {
@@ -821,6 +745,12 @@ void FlushScheduledSaveSettings() {
     if (!gSaveSettingsPending) {
         return;
     }
+    SaveSettings();
+}
+
+// Settings aren't written on every change; this gets the current state, including
+// the session, into the file. Still honors -for-testing and restricted use.
+void SaveSettingsNow() {
     SaveSettings();
 }
 
@@ -1181,6 +1111,12 @@ void UnregisterSettingsForFileChanges() {
 
 constexpr int kMinFontSize = 9;
 
+// Annotations.PopupFontSize, used as-is at every dpi; 0 when not set
+int GetAnnotPopupFontSize() {
+    int fntSize = gSettings->annotations.popupFontSize;
+    return fntSize >= kMinFontSize ? fntSize : 0;
+}
+
 #if !defined(SUMATRA_NG)
 // metrics for an explicit DPI (system dpi when GetNonClientMetricsForDpi fails)
 static void GetNonClientMetricsForDpiValue(int dpi, NONCLIENTMETRICS* ncm) {
@@ -1203,10 +1139,6 @@ int GetAppMenuFontSizeForDpi(int dpi) {
     NONCLIENTMETRICS ncm{};
     GetNonClientMetricsForDpiValue(dpi, &ncm);
     return std::abs(ncm.lfMenuFont.lfHeight);
-}
-
-int GetAppMenuFontSize() {
-    return GetAppMenuFontSizeForDpi(DpiGet());
 }
 
 int GetAppFontSizeForDpi(int dpi) {
@@ -1260,6 +1192,14 @@ PlatformFont* GetAppBiggerFontForDpi(int dpi) {
 
 PlatformFont* GetAppBiggerFont() {
     return GetAppBiggerFontForDpi(DpiGet());
+}
+
+PlatformFont* GetAnnotPopupFontForDpi(int dpi) {
+    int fntSize = GetAnnotPopupFontSize();
+    if (fntSize == 0) {
+        return GetAppFontForDpi(dpi);
+    }
+    return GetUserGuiFont(StrL("auto"), fntSize);
 }
 
 PlatformFont* GetAppTreeFontExForDpi(int dpi, bool bold, bool italic) {
@@ -1359,6 +1299,24 @@ TempStr ZoomLevelStr(float zoom) {
         return StrL("-");
     }
     return fmt("%.f%%", zoom);
+}
+
+// A zoom edit's text: one of levels by name, or a typed number clamped to the
+// zoom range. Empty, unreadable or a 0 level gives fallback.
+float ParseZoomText(Str text, const Vec<float>& levels, float fallback) {
+    for (float z : levels) {
+        if (str::EqI(text, ZoomLevelStrExact(z))) {
+            return z == 0 ? fallback : z;
+        }
+    }
+    if (len(text) == 0) {
+        return fallback;
+    }
+    float zoom = (float)atof(CStrTemp(text));
+    if (zoom == 0) {
+        return fallback;
+    }
+    return limitValue(zoom, kZoomMin, kZoomMax);
 }
 
 // A level as a list of them should offer it: a fit mode by name, a percentage
@@ -1475,7 +1433,7 @@ static void CollectSettingFieldsInStruct(Vec<SettingField>& out, const StructInf
             comment = Str(fieldComment);
             fieldComment += len(comment) + 1;
         }
-        if (field.internal || field.type == SettingType::Comment || field.offset == (size_t)-1) {
+        if (field.internal || field.secret || field.type == SettingType::Comment || field.offset == (size_t)-1) {
             continue;
         }
         int offset = baseOffset + (int)field.offset;
@@ -1757,7 +1715,7 @@ static SeqStrings kFileStateKeepNoPerDoc =
 
 // prevData is used to preserve fields that exists in prevField but not in Settings
 // caller has to free()
-Str SerializeSettings(Settings* prefs, Str prevData) {
+Str SerializeSettings(Settings* prefs, Str prevData, SerializeOpt opt) {
     Vec<FileState*>* allFileStates = prefs->fileStates;
     Vec<FileState*> withFavorites;
 
@@ -1805,7 +1763,7 @@ Str SerializeSettings(Settings* prefs, Str prevData) {
         gFileStateInfo.fieldNames = keepNames;
         gFileStateInfo.fieldCount = (u16)nKeep;
 
-        Str serialized = SerializeStruct(&gSettingsInfo, prefs, prevData);
+        Str serialized = SerializeStruct(&gSettingsInfo, prefs, prevData, opt);
 
         gFileStateInfo.fields = savedFields;
         gFileStateInfo.fieldNames = savedNames;
@@ -1814,7 +1772,7 @@ Str SerializeSettings(Settings* prefs, Str prevData) {
         return serialized;
     }
 
-    return SerializeStruct(&gSettingsInfo, prefs, prevData);
+    return SerializeStruct(&gSettingsInfo, prefs, prevData, opt);
 }
 
 void DeleteSettings(Settings* gp) {

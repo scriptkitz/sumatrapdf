@@ -31,10 +31,6 @@ MainWindow* BrowserViewWindow(BrowserView*) {
 
 void BrowserViewSetVisible(BrowserView*, bool) {}
 
-bool BrowserViewIsVisible(BrowserView*) {
-    return false;
-}
-
 void BrowserViewRefreshSurface(BrowserView*) {}
 
 void BrowserViewNavigate(BrowserView*, Str) {}
@@ -69,6 +65,10 @@ void BrowserViewSelectAll(BrowserView*) {}
 
 void BrowserViewCopySelection(BrowserView*) {}
 
+bool BrowserViewCapturePng(BrowserView*, const Func1<Str>&) {
+    return false;
+}
+
 void BrowserViewPrint(BrowserView*, bool) {}
 
 void BrowserViewFindInPageUI(BrowserView*) {}
@@ -88,6 +88,8 @@ void BrowserViewFindClear(BrowserView*) {}
 LRESULT BrowserViewPassUIMsg(BrowserView*, UINT, WPARAM, LPARAM) {
     return 0;
 }
+
+void BrowserViewScrollKey(BrowserView*, int) {}
 
 gpui::El* BrowserViewBuild(BrowserView*, gpui::Ctx*, int) {
     return nullptr;

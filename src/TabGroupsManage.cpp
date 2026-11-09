@@ -19,6 +19,7 @@
 #include "EngineBase.h"
 #include "SumatraPDF.h"
 #include "MainWindow.h"
+#include "AIChatTypes.h"
 #include "WindowTab.h"
 #include "Translations.h"
 #include "SumatraConfig.h"
@@ -53,11 +54,6 @@ struct TabGroupsListBoxModel : ListBoxModel {
     int ItemsCount() override { return len(groups); }
 
     Str Item(int i) override { return groups[i]->name; }
-
-    int TabCount(int i) {
-        auto* tf = groups[i]->tabFiles;
-        return tf ? len(*tf) : 0;
-    }
 };
 
 struct TabGroupsWnd : WindowBase {
@@ -65,6 +61,7 @@ struct TabGroupsWnd : WindowBase {
 
     HWND hwndParent = nullptr;
     Edit* editName = nullptr;
+    Checkbox* cbAutoSync = nullptr;
     VirtListBox* listBox = nullptr;
     TabGroupsListBoxModel* model = nullptr;
     VirtButton* btnOk = nullptr;
@@ -103,24 +100,14 @@ void TabGroupsWnd::SaveTabGroup() {
 
     auto* group = AllocStruct<TabGroup>();
     group->name = str::Dup(name);
-    group->tabFiles = new Vec<TabFile*>();
-
-    for (WindowTab* tab : win->Tabs()) {
-        if (tab->IsAboutTab()) {
-            continue;
-        }
-        if (len(tab->filePath) == 0) {
-            continue;
-        }
-        auto* tf = AllocStruct<TabFile>();
-        str::ReplaceWithCopy(&tf->path, tab->filePath);
-        VecAppend(*group->tabFiles, tf);
-    }
+    group->autoSync = cbAutoSync && cbAutoSync->IsChecked();
+    SetTabGroupFiles(group, win);
 
     if (!gSettings->tabGroups) {
         gSettings->tabGroups = new Vec<TabGroup*>();
     }
     VecAppend(*gSettings->tabGroups, group);
+    LinkTabGroup(win, group);
     ScheduleSaveSettings();
     Close();
 }
@@ -141,13 +128,7 @@ void TabGroupsWnd::OpenTabGroup() {
 
     // reuse current window if it has no files open (only about tab or empty)
     MainWindow* targetMain = win;
-    bool hasFiles = false;
-    for (WindowTab* tab : targetMain->Tabs()) {
-        if (!tab->IsAboutTab()) {
-            hasFiles = true;
-            break;
-        }
-    }
+    bool hasFiles = HasOpenedDocuments(targetMain);
     MainWindow* targetWin = hasFiles ? CreateAndShowMainWindow(nullptr) : targetMain;
     if (!targetWin) {
         return;
@@ -163,6 +144,9 @@ void TabGroupsWnd::OpenTabGroup() {
         }
         LoadDocument(&args);
         first = false;
+    }
+    if (IsMainWindowValid(targetWin)) {
+        LinkTabGroup(targetWin, group);
     }
     // post WM_CLOSE instead of DestroyWindow so we return from the
     // listbox double-click callback before the dialog is torn down
@@ -198,8 +182,8 @@ static void DrawTabGroupItem(TabGroupsWnd* w, VirtListBox::DrawItemEvent* ev) {
     if (ev->itemIndex < 0 || ev->itemIndex >= w->model->ItemsCount()) {
         return;
     }
-    TempStr nTabs = fmt("%d tabs", w->model->TabCount(ev->itemIndex));
-    DrawDlgListItem(ev->listBox, ev->gfx, ev->itemRect, ev->selected, w->model->Item(ev->itemIndex), nTabs);
+    TempStr info = TabGroupInfoTemp(w->model->groups[ev->itemIndex]);
+    DrawDlgListItem(ev->listBox, ev->gfx, ev->itemRect, ev->selected, w->model->Item(ev->itemIndex), info);
 }
 
 static void OnListDoubleClick(TabGroupsWnd* w) {
@@ -291,6 +275,8 @@ bool TabGroupsWnd::Create(MainWindow* winIn, TabGroupDialogMode modeIn) {
         row->minDy = DpiScale(kToolDlgLineDy);
         row->AddChild(editName, 1);
         vbox->AddChild(new Padding(row, DpiScaledInsets(0, kToolDlgPadDx)));
+        cbAutoSync = NewDlgCheckbox(hwnd, Tr("&Keep the group in sync with this window's tabs"), fontText, false);
+        vbox->AddChild(new Padding(cbAutoSync, DpiScaledInsets(0, kToolDlgPadDx, 8, kToolDlgPadDx)));
         vbox->AddChild(new VirtLine());
     }
 

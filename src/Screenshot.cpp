@@ -264,16 +264,18 @@ static void TeardownSetHotkeyWnd() {
     w->ScheduleDelete();
 }
 
-static void OnSetHotkeyClose(WindowBase::CloseEvent* ev) {
-    if (gSetHotkeyWnd == (SetHotkeyWnd*)ev->e->self) {
+static void TeardownIfCurrent(void* self) {
+    if (gSetHotkeyWnd == (SetHotkeyWnd*)self) {
         TeardownSetHotkeyWnd();
     }
 }
 
+static void OnSetHotkeyClose(WindowBase::CloseEvent* ev) {
+    TeardownIfCurrent(ev->e->self);
+}
+
 static void OnSetHotkeyDestroy(WindowBase::DestroyEvent* ev) {
-    if (gSetHotkeyWnd == (SetHotkeyWnd*)ev->e->self) {
-        TeardownSetHotkeyWnd();
-    }
+    TeardownIfCurrent(ev->e->self);
 }
 
 bool SetHotkeyWnd::Create(HWND owner) {
@@ -313,7 +315,7 @@ bool SetHotkeyWnd::Create(HWND owner) {
 
     auto* vbox = new VBox();
     vbox->alignCross = CrossAxisAlign::Stretch;
-    prompt = NewDlgCaption(Tr("Press a key combination:"), fontText, ThemeWindowTextDisabledColor());
+    prompt = NewDlgCaption(Tr("Press a key combination:"), fontText, ThemeWindowDarkerTextColor());
     vbox->AddChild(prompt);
     {
         // the combination, a key-cap a key, on a line of its own

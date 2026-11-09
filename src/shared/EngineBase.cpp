@@ -211,6 +211,116 @@ bool ParseJsPopUpMenuItems(Str js, StrVec& items) {
     return len(items) > 0;
 }
 
+// KiCad: ShM([["Reference = U1"], ["Datasheet = <url>", "<url>"], ...]). Each
+// inner array's first string is a menu item, the second what picking it returns.
+bool ParseJsMenuCallItems(Str js, StrVec& items, StrVec& returns) {
+    Str name = ExtractJsCallName(js);
+    if (len(name) == 0) {
+        return false;
+    }
+    const char* p = name.s + len(name);
+    const char* end = js.s + len(js);
+    SkipJsWs(p, end);
+    if (p >= end || *p != '(') {
+        return false;
+    }
+    p++;
+    SkipJsWs(p, end);
+    if (p >= end || *p != '[') {
+        return false;
+    }
+    p++;
+
+    while (p < end) {
+        SkipJsWs(p, end);
+        if (p < end && *p == ',') {
+            p++;
+            continue;
+        }
+        if (p >= end || *p != '[') {
+            break;
+        }
+
+        // one [item, return] entry
+        p++;
+        str::Builder item;
+        str::Builder ret;
+        int nStrings = 0;
+        while (p < end && *p != ']') {
+            if (*p != '"' && *p != '\'') {
+                p++;
+                continue;
+            }
+            str::Builder ignored;
+            str::Builder& b = nStrings == 0 ? item : (nStrings == 1 ? ret : ignored);
+            if (!ParseJsQuotedString(p, end, b)) {
+                return false;
+            }
+            nStrings++;
+        }
+        if (p >= end) {
+            return false;
+        }
+        p++;
+        if (nStrings == 0) {
+            continue;
+        }
+        items.Append(ToStr(item));
+        returns.Append(ToStr(ret));
+    }
+    return len(items) > 0;
+}
+
+// true when js defines function `name` and shows a popUpMenu
+bool JsDefinesMenuFunction(Str js, Str name) {
+    if (len(name) == 0 || str::IndexOf(js, StrL("popUpMenu")) < 0) {
+        return false;
+    }
+    TempStr needle = fmt("function %s", name);
+    const char* end = js.s + len(js);
+    int idx = str::IndexOf(js, needle);
+    while (idx >= 0) {
+        const char* p = js.s + idx + len(needle);
+        if (p >= end || !IsJsIdentChar(*p)) {
+            return true;
+        }
+        int next = str::IndexOf(Str(p, (int)(end - p)), needle);
+        idx = next < 0 ? -1 : (int)(p - js.s) + next;
+    }
+    return false;
+}
+
+// What picking item i of a JavaScript menu does: launch a URL, or go to a page.
+JsMenuAction GetJsMenuAction(PageDestinationJsMenu* dest, int i) {
+    JsMenuAction res;
+    if (!dest || i < 0 || i >= len(dest->items)) {
+        return res;
+    }
+
+    Str ret = i < len(dest->returns) ? dest->returns[i] : Str{};
+    if (len(ret) > 0) {
+        // KiCad: "#<n>" sets the 0-based this.pageNum; file:///<net> names a net, not a file
+        if (ret.s[0] == '#' && len(ret) > 1 && str::IsDigit(ret.s[1])) {
+            res.pageNo = ParseInt(Str(ret.s + 1, len(ret) - 1)) + 1;
+        } else if (IsExternalUrl(ret) || str::StartsWithI(ret, StrL("ftp://"))) {
+            res.url = ret;
+        }
+        return res;
+    }
+
+    // Altium: "Datasheet: https://..."
+    Str url = dest->items[i];
+    int colon = str::IndexOf(url, StrL(": "));
+    if (colon >= 0) {
+        url = Str(url.s + colon + 2, url.len - colon - 2);
+        str::TrimWs(url);
+    }
+    if (IsExternalUrl(url) || str::StartsWithI(url, StrL("ftp://"))) {
+        res.url = url;
+    }
+    return res;
+}
+
 // First identifier that is followed by '(', skipping JS keywords.
 Str ExtractJsCallName(Str js) {
     if (len(js) == 0) {
@@ -494,8 +604,15 @@ struct ChapterTextCache {
 
 struct PageTextCache {
     Vec<ChapterTextCache*> chapters; // index = chapter - 1; entries lazily created
+    // invalidated text: callers may still hold its pointers, so it lives as long as the engine
+    Vec<PageText> retired;
 
-    ~PageTextCache() { DeleteVecMembers(chapters); }
+    ~PageTextCache() {
+        DeleteVecMembers(chapters);
+        for (PageText& pt : retired) {
+            FreePageText(&pt);
+        }
+    }
 
     // Existing page entry, without creating or growing its chapter cache.
     TextCacheEntry* Peek(Location loc) {
@@ -727,6 +844,10 @@ static void ChapterLayoutThread(ChapterLayoutJob* job) {
     int id = job->job;
     delete job;
     AutoRelease release(engine);
+    // shutdown waits for this thread: laying out uses fonts it frees
+    defer {
+        AtomicIntDec(&gDangerousThreadCount);
+    };
 
     int total = engine->ChapterCount();
     {
@@ -768,6 +889,7 @@ void EngineBase::StartBackgroundChapterLayout() {
     }
     int id = AtomicIntInc(&layoutJob);
     AddRef();
+    AtomicIntInc(&gDangerousThreadCount);
     auto* job = new ChapterLayoutJob();
     job->engine = this;
     job->job = id;
@@ -1037,7 +1159,10 @@ void EngineBase::InvalidateTextForPage(int pageNo) {
     if (!page) {
         return;
     }
-    FreePageText(&page->data);
+    if (page->data.text || page->data.coords || page->data.quads) {
+        VecAppend(pageTextCache->retired, page->data);
+    }
+    page->data = {};
     page->state = TextExtractionState::NotExtracted;
 }
 
@@ -1316,10 +1441,9 @@ void EnginePdfProxy::CopyStateFromPdfEngine() {
     logicalPageCount = pdfEngine->LogicalPageCount();
 }
 
-// returns false if didn't perform action (temporary until we move
-// all code there)
+// an engine that follows a link itself (mupdf, djvu, ebook) overrides this;
+// false lets the caller's link handler follow it
 bool EngineBase::HandleLink(IPageDestination* /*dest*/, ILinkHandler* /*linkHandler*/) {
-    // if not implemented in derived classes
     return false;
 }
 

@@ -579,6 +579,7 @@ const enginesSources = [
   "src/ng/EngineBase.cpp",
   "src/ng/EngineCreate.cpp",
   "src/ng/EngineDjvuDec.cpp",
+  "src/ng/EngineCaj.cpp",
   "src/ng/EngineDvi.cpp",
   "src/ng/ExifDump.cpp",
   "src/ng/EngineEbook.cpp",
@@ -592,6 +593,7 @@ const enginesSources = [
   "src/ng/ImageReader.cpp",
   "src/ng/JxlReader.cpp",
   "src/ng/LitDoc.cpp",
+  "src/ng/RtfDoc.cpp",
   "src/ng/MobiDoc.cpp",
   "src/PalmDbReader.cpp",
   "src/ng/PdfCad.cpp",
@@ -633,6 +635,7 @@ const appSources = [
   "src/ng/NavFilesInFolder.cpp",
   "src/ng/NavFilesInFolderCommon.cpp",
   "src/ng/PagePosition.cpp",
+  "src/ng/ScrollbarPrefs.cpp",
   "src/ng/RefHoverDetect.cpp",
   "src/RefHoverInternal.cpp",
   "src/RefHoverText.cpp",
@@ -645,6 +648,7 @@ const appSources = [
   "src/ng/Theme.cpp",
   "src/ng/TranslationLangs.cpp",
   "src/ng/Translations.cpp",
+  "src/ng/SystemLocale_mac.mm",
   // the browser's file picker, downloads and OPFS write-back (wasm only,
   // and no gpui in it, so it belongs here rather than in the app target)
   "src/ng/gui/WasmBridge_wasm.cpp",
@@ -905,7 +909,7 @@ export const targets: Target[] = [
       "ext/libjpeg-turbo/src/jpeg_nbits.c",
       // 8-bit precision wrappers; each #includes ../<name>.c
       "ext/libjpeg-turbo/src/wrapper/*-8.c",
-      "ext/libjpeg-turbo/simd/x86_64/jsimd.c",
+      "ext/libjpeg-turbo/simd/jsimd.c",
     ],
     // the readers/writers belong to cjpeg/djpeg, not to the library
     exclude: [
@@ -976,7 +980,7 @@ export const targets: Target[] = [
       "HAVE_WEBP=1",
       "SHARE_JPEG",
       // built-in fonts come from the loader (embedded pak, then cache, then
-      // fonts_map.c). Source Han is not packed: skip its table entries
+      // fonts_map.c). Droid Sans Fallback for CJK; noto_sumatra.c adds Source Han per language
       "TOFU_CJK_LANG",
       "FZ_ENABLE_PDF=1",
       "FZ_ENABLE_SVG=1",
@@ -1241,9 +1245,11 @@ export const targets: Target[] = [
   },
   {
     // synctex: TeX source <-> PDF position mapping (orig compiles it into the
-    // app; a static lib keeps the warning relaxation out of our sources)
+    // app; a static lib keeps the warning relaxation out of our sources).
+    // Not on wasm: a browser tab has no LaTeX integration (PdfSync.cpp)
     name: "synctex",
     kind: "staticlib",
+    platforms: ["win", "linux", "mac"],
     sources: ["ext/synctex/synctex_parser.c", "ext/synctex/synctex_parser_utils.c"],
     includes: ["ext/synctex", "ext/a-zlib"],
     deps: ["a-zlib"],
@@ -1368,6 +1374,7 @@ export const targets: Target[] = [
       "src/ng/base/tests/*.cpp",
       "src/ng/tests/*.cpp",
       "src/ng/TipMarkup.cpp",
+      "src/ng/HexViewCommon.cpp",
       // ReadAloudHighlight_ut needs the text half of read aloud (step 14c)
       "src/ng/ReadAloudHighlight.cpp",
       "src/ng/SumatraLog.cpp",
@@ -1403,7 +1410,7 @@ export const targets: Target[] = [
     // minimal host for SumatraPDF -plugin mode (orig src/tools/plugin-test.cpp)
     name: "plugin-test",
     kind: "app",
-    sources: ["src/ng/tools/plugin-test.cpp"],
+    sources: ["src/ng/tools/plugin-test.cpp", "src/ng/tools/ToolLog.cpp"],
     includes: ["src/ng"],
     deps: ["base"],
     platforms: ["win"],
@@ -1460,6 +1467,8 @@ export const targets: Target[] = [
     kind: "console",
     sources: [
       "src/ng/tools/test_engines.cpp",
+      "src/ng/tools/TestEnginesCommon.cpp",
+      "src/ng/tools/ToolLog.cpp",
       "src/ng/tools/AppStubs.cpp",
       "src/ng/gui/BrowserViewNoOp.cpp",
       "src/ng/CrashHandlerNoOp.cpp",
@@ -1589,6 +1598,7 @@ export const targets: Target[] = [
       "src/ng/SelectionTranslateCommon.cpp",
       "src/ng/GoogleLens.cpp",
       "src/ng/AIChatCommon.cpp",
+      "src/ng/AIChatAPI.cpp",
       "src/ng/AIChatPanel.cpp",
       "src/ng/AIChatPanelCommon.cpp",
       "src/ng/AIClaudeCode.cpp",
@@ -1600,8 +1610,12 @@ export const targets: Target[] = [
       "src/ng/gui/DialogWidgets.cpp",
       "src/ng/DocumentProperties.cpp",
       "src/ng/DocumentPropertiesCommon.cpp",
+      "src/ng/HexView.cpp",
+      "src/ng/HexViewCommon.cpp",
       "src/ng/HomePage.cpp",
       "src/ng/HomePageCommon.cpp",
+      "src/ng/OpenFromUrlCommon.cpp",
+      "src/ng/OpenFromUrlDialog.cpp",
       "src/ng/AppHelpersCommon.cpp",
       "src/ng/AddFavoriteDialog.cpp",
       "src/ng/Favorites.cpp",
@@ -1629,6 +1643,7 @@ export const targets: Target[] = [
       "src/ng/gui/NativeWindow_wasm.cpp",
       "src/ng/gui/OleDragDrop_win.cpp",
       "src/ng/OleDragDropCommon_win.cpp",
+      "src/ng/WebViewCapture_win.cpp",
       "src/ng/gui/NativeFileDlg_win.cpp",
       "src/ng/OpenFileFilters_win.cpp",
       "src/ng/gui/NativeMsgBox_win.cpp",
@@ -1685,7 +1700,7 @@ export const targets: Target[] = [
     // orig's desktop screenshot picker. Win32 only; other platforms keep the
     // page render in src/ng/Screenshot.cpp.
     perPlatform: {
-      win: { sources: ["src/ScreenshotCapture.cpp"] },
+      win: { sources: ["src/ScreenshotCapture.cpp"], includes: ["ext/webview2"] },
     },
   },
 ];

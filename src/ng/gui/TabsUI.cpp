@@ -13,6 +13,7 @@
 #include "base/UITask.h"
 
 #include "gui/Dpi.h"
+#include "gui/PlatformFont.h"
 #include "gui/UIModels.h"
 
 #include "Settings.h"
@@ -29,6 +30,7 @@
 #include "Menu.h"
 #include "SumatraPDF.h"
 #include "MainWindow.h"
+#include "AIChatTypes.h"
 #include "WindowTab.h"
 #include "Tabs.h"
 #include "gui/AppShell.h"
@@ -37,6 +39,7 @@
 #include "gui/DialogWidgets.h"
 #include "gui/TabsUI.h"
 #include "AppHelpersCommon.h"
+#include "SvgIcons.h"
 
 #include "SumatraLog.h"
 
@@ -72,6 +75,10 @@ struct TabsView {
     static void OnTabDown(TabsView* self, gp::Ctx* cx, const gp::MouseDownEvent* ev, int64_t idx);
     static void OnTabUp(TabsView* self, gp::Ctx* cx, const gp::MouseUpEvent* ev, int64_t idx);
     static void OnBarDown(TabsView* self, gp::Ctx* cx, const gp::MouseDownEvent* ev);
+    static void OnPlusClick(TabsView* self, gp::Ctx* cx, const gp::ClickEvent*);
+#if OS_WASM
+    static void OnHomeClick(TabsView* self, gp::Ctx* cx, const gp::ClickEvent*);
+#endif
     static void OnBarWheel(TabsView* self, gp::Ctx* cx, const gp::ScrollWheelEvent* ev);
     static void OnFillerDrop(TabsView* self, gp::Ctx* cx, const gp::DropEvent* ev);
     static void OnTabHover(TabsView* self, gp::Ctx* cx, const gp::HoverEvent* ev, int64_t idx);
@@ -115,8 +122,16 @@ void TabsUIOnTabsChanged(MainWindow* win) {
 
 // orig: a pinned tab (the Home tab) is neither dragged nor a drop target
 static bool IsPinnedTab(WindowTab* tab) {
+    return tab->IsPinnedHomeTab();
+}
+
+// orig: every Home tab is as wide as its label; a "+" one keeps room for its ✕ (#6469)
+static bool IsLabelSizedTab(WindowTab* tab) {
     return tab->IsAboutTab();
 }
+
+// the ✕ of a tab, and the room a label-sized tab keeps for it when it's hidden
+constexpr float kTabCloseDx = 20;
 
 static Color TabBgColor(WindowTab* tab, bool isSelected, bool isUnderMouse) {
     Color selected = ThemeActiveTabBackgroundColor();
@@ -134,8 +149,42 @@ static Color TabBgColor(WindowTab* tab, bool isSelected, bool isUnderMouse) {
     return isUnderMouse ? AccentColor(inactive, 10) : inactive;
 }
 
-// orig's LayoutTabs: every tab is as wide as TabWidth allows, shrinking so all
-// of them fit the bar
+// the tab label's size; Home's margins are 1rem of it
+constexpr float kTabFontSize = 12;
+
+// TabsEqualWidth = false: what a tab sized to its name needs, in dips, as
+// BuildTab lays it out: margins, page suffix, dirty dot and room for the ✕
+static int FitToNameDx(MainWindow* win, WindowTab* tab) {
+    int dpi = std::max(AppShellWindowDpi(win), 96);
+    Str family = FromGpui(gp::PaintSystemUIFontMappedFamily());
+    auto measure = [&](Str s, float fontSize) {
+        PlatformFont* font = GetUserGuiFont(family, MulDiv((int)fontSize, dpi, 96));
+        return MulDiv(PlatformFontMeasureText(font, s).dx, 96, dpi);
+    };
+    int dx = 8 + measure(tab->GetTabTitle(), kTabFontSize);
+    TempStr pageText = TabPageSuffixTemp(tab);
+    if (len(pageText) > 0) {
+        dx += 2 + measure(pageText, 10);
+    }
+    if (TabIsDirty(tab)) {
+        dx += 2 + 6;
+    }
+    return dx + 2 + (int)kTabCloseDx + 2 + 1;
+}
+
+// for -dbg-control: each tab's laid-out width, one "dx=<n> text=<title>" line per tab
+TempStr TabsUIWidthsTemp(MainWindow* win) {
+    TabsUI* ui = Ui(win);
+    str::Builder out;
+    for (int i = 0; i < win->TabCount() && i < len(ui->tabBounds); i++) {
+        out.Append(fmt("dx=%d text=%s\n", (int)ui->tabBounds[i].w, win->GetTab(i)->GetTabTitle()));
+    }
+    return ToStrTemp(out);
+}
+
+// orig's LayoutTabs: every document tab is as wide as TabWidth allows, shrinking
+// so all of them fit the bar. Home is sized by its label, so the others get what
+// it took in the last frame: its width is only known after layout
 static int TabWidth(MainWindow* win, int barDx) {
     TabsUI* ui = Ui(win);
     int nTabs = win->TabCount();
@@ -145,8 +194,31 @@ static int TabWidth(MainWindow* win, int barDx) {
     if (ui->widthFrozen && ui->frozenDx > 0) {
         return ui->frozenDx;
     }
-    int maxDx = (barDx - 5) / nTabs;
-    return std::min(gSettings->tabWidth, maxDx);
+    // the "+" is square and always there
+    int restDx = barDx - 5 - ui->barDy;
+    int nRest = nTabs;
+    for (int i = 0; i < nTabs; i++) {
+        if (!IsLabelSizedTab(win->GetTab(i))) {
+            continue;
+        }
+        nRest--;
+        if (i < len(ui->tabBounds)) {
+            restDx -= (int)ui->tabBounds[i].w;
+        }
+    }
+    if (gSettings->tabsEqualWidth) {
+        return std::min(gSettings->tabWidth, restDx / std::max(nRest, 1));
+    }
+    // as wide as the name, shrunk like equal-width tabs when they don't fit,
+    // but never wider than the name needs (BuildTab caps each at this)
+    Vec<int> nameDx;
+    for (int i = 0; i < nTabs; i++) {
+        WindowTab* tab = win->GetTab(i);
+        if (!IsLabelSizedTab(tab)) {
+            VecAppend(nameDx, std::min(FitToNameDx(win, tab), gSettings->tabWidth));
+        }
+    }
+    return FairShareCap(nameDx, restDx);
 }
 
 // --- input ------------------------------------------------------------------
@@ -377,6 +449,42 @@ void TabsView::OnTabClose(TabsView* self, gp::Ctx* cx, const gp::ClickEvent*, in
     gp::Notify(cx);
 }
 
+void TabsView::OnPlusClick(TabsView* self, gp::Ctx* cx, const gp::ClickEvent*) {
+    AddExtraHomeTab(self->win);
+    gp::Notify(cx);
+}
+
+#if OS_WASM
+static void RunExitCmd(MainWindow* win) {
+    if (IsMainWindowValidAndNotClosing(win)) {
+        ExecuteCmd(win, CmdExit);
+    }
+}
+
+// Exit saves the state, then the host page goes to its home page (sumatra-web
+// navigates to "/", docs/wasm-host-api.md). Posted: Exit deletes the window
+// this click is still being handled in
+void TabsView::OnHomeClick(TabsView* self, gp::Ctx* cx, const gp::ClickEvent*) {
+    uitask::Post(MkFunc0<MainWindow>(RunExitCmd, self->win), "HomeExit");
+    gp::Notify(cx);
+}
+
+// SumatraPDF Web: back to the web app's home page, before the menu button
+static gp::El* TabsUIHomeButton(MainWindow* win, gp::Ctx* cx) {
+    gpc::Icon* icon = gpc::Icon::Empty(cx)->Data(ToGpui(Str(gIconHome)));
+    gp::El* btn = gpc::Button::New(cx, GStrL("sumatra-web-home"))
+                      ->Icon(gpc::ButtonIcon::New(cx, icon)->WithSize(gp::UiSize::Small))
+                      ->Ghost()
+                      ->Compact()
+                      ->WithSize(gp::UiSize::Small)
+                      ->Tooltip(GpuiDup(cx->a, Tr("Home")))
+                      ->OnClick(gp::ListenTo(Ui(win)->view, &TabsView::OnHomeClick))
+                      ->IntoEl();
+    btn->H(gp::kFill)->Shrink0();
+    return btn;
+}
+#endif
+
 // ng: orig's TrackPopupMenu returns the command only after the menu is gone.
 // gpui's popup is still up when the action fires, and it holds the keyboard and
 // the mouse, so a command that opens a dialog would open it behind a layer that
@@ -429,7 +537,9 @@ static gp::El* CloseButton(MainWindow* win, gp::Ctx* cx, int idx) {
         ->Compact()
         ->WithSize(gp::UiSize::XSmall)
         ->OnClick(gp::ListenTo(Ui(win)->view, &TabsView::OnTabClose, (intptr_t)idx))
-        ->IntoEl();
+        ->IntoEl()
+        ->W(kTabCloseDx)
+        ->Shrink0();
 }
 
 static gp::El* BuildTab(MainWindow* win, gp::Ctx* cx, int idx, int tabDx) {
@@ -449,15 +559,26 @@ static gp::El* BuildTab(MainWindow* win, gp::Ctx* cx, int idx, int tabDx) {
         textCol = IsLightColor(bgCol) ? MkRgb(0xC4, 0x1E, 0x1E) : MkRgb(0xFF, 0x6A, 0x6A);
     }
 
+    // orig: Home is as wide as its label plus margins. The pinned one has no room
+    // for a close, a "+" one keeps it
+    bool isHome = IsLabelSizedTab(tab);
+    bool isPinnedHome = IsPinnedTab(tab);
+    // a tab sized by its label keeps the ✕'s room, so selecting it doesn't resize it
+    bool keepsCloseRoom = isHome || !gSettings->tabsEqualWidth;
+    float padR = isSelected ? 2.f : 8.f;
+    if (isPinnedHome) {
+        padR = kTabFontSize;
+    } else if (keepsCloseRoom) {
+        padR = 2.f;
+    }
     gp::El* el = gp::Div(cx->a)
                      ->FlexRow()
-                     ->W((float)tabDx)
                      ->H(gp::kFill)
                      ->Shrink0()
                      ->ItemsCenter()
                      ->Gap(2)
-                     ->PadL(8)
-                     ->PadR(isSelected ? 2.f : 8.f)
+                     ->PadL(isHome ? kTabFontSize : 8.f)
+                     ->PadR(padR)
                      ->Bg(ToGpui(bgCol))
                      ->Role(gp::AccessibilityRole::Tab)
                      ->AriaLabel(GpuiDup(cx->a, tab->GetTabTitle()))
@@ -474,12 +595,14 @@ static gp::El* BuildTab(MainWindow* win, gp::Ctx* cx, int idx, int tabDx) {
     // (OnTabDrop refuses the position a pinned tab holds)
     el->OnDrop(GStrL("sumatra-tab"), gp::ListenTo(Ui(win)->view, &TabsView::OnTabDrop, (intptr_t)idx));
 
-    gp::El* title = gp::TextEl(cx->a, GpuiDup(cx->a, tab->GetTabTitle()))
-                        ->Font(12)
-                        ->Fg(ToGpui(textCol))
-                        ->Flex1()
-                        ->MinW(0)
-                        ->Truncate();
+    gp::El* title = gp::TextEl(cx->a, GpuiDup(cx->a, tab->GetTabTitle()))->Font(kTabFontSize)->Fg(ToGpui(textCol));
+    if (!isHome && gSettings->tabsEqualWidth) {
+        el->W((float)tabDx);
+        title->Flex1()->MinW(0)->Truncate();
+    } else if (!isHome) {
+        el->MaxW((float)tabDx);
+        title->Shrink(1)->MinW(0)->Truncate();
+    }
     el->Child(title);
 
     TempStr pageText = TabPageSuffixTemp(tab);
@@ -492,8 +615,11 @@ static gp::El* BuildTab(MainWindow* win, gp::Ctx* cx, int idx, int tabDx) {
     }
     // like Chrome: only the selected tab shows its ✕, so a click on another
     // tab always selects it and can't accidentally close it
-    if (isSelected) {
+    if (isSelected && !isPinnedHome) {
         el->Child(CloseButton(win, cx, idx));
+    } else if (keepsCloseRoom && !isPinnedHome) {
+        // the label stays where it is when the tab is selected
+        el->Child(gp::Div(cx->a)->W(kTabCloseDx)->Shrink0());
     }
     return el;
 }
@@ -502,17 +628,6 @@ static gp::El* BuildTab(MainWindow* win, gp::Ctx* cx, int idx, int tabDx) {
 static uint32_t ActMenuCmd() {
     static uint32_t id = gp::ActionOf(GStrL("sumatra::Cmd"));
     return id;
-}
-
-// "Underline access keys when available" (off until Alt, by default)
-static bool MenuCuesOn() {
-#if OS_WIN
-    BOOL on = FALSE;
-    SystemParametersInfoW(SPI_GETKEYBOARDCUES, 0, &on, 0);
-    return on != FALSE;
-#else
-    return false;
-#endif
 }
 
 static void SetMenuCue(gp::Ctx* cx, gpc::PopupMenu* menu, gp::Str label, const MenuAccelText& at, bool disabled) {
@@ -570,7 +685,7 @@ gp::El* TabsUIMenuButton(MainWindow* win, gp::Ctx* cx) {
     if (win->isMenuBarVisible || AppShellNativeMenu() || !win->menu) {
         return nullptr;
     }
-    gpc::PopupMenu* popup = MenuPopupFromModel(cx, win->menu, StrL("sumatra-menu-btn"), MenuCuesOn());
+    gpc::PopupMenu* popup = MenuPopupFromModel(cx, win->menu, StrL("sumatra-menu-btn"), MenuCuesAlways());
     popup->MinW(160);
     TrackPopup(cx, popup);
 
@@ -629,12 +744,25 @@ gp::El* TabsUIBuild(MainWindow* win, gp::Ctx* cx, int barDy) {
                       ->OnMouseUpOut(gp::ListenTo(Ui(win)->view, &TabsView::OnBarUpOut));
     // orig's caption has a menu button left of the tabs while the menu bar is
     // hidden (CB_MENU); a click opens the bar's menus as one drop-down
+#if OS_WASM
+    bar->Child(TabsUIHomeButton(win, cx));
+#endif
     if (gp::El* menuBtn = TabsUIMenuButton(win, cx)) {
         bar->Child(menuBtn);
     }
     for (int i = 0; i < nTabs; i++) {
         bar->Child(BuildTab(win, cx, i, tabDx));
     }
+    bar->Child(gpc::Button::New(cx, GStrL("sumatra-tabs-plus"))
+                   ->Icon(gp::IconName::Plus)
+                   ->Ghost()
+                   ->Compact()
+                   ->WithSize(gp::UiSize::XSmall)
+                   ->OnClick(gp::ListenTo(Ui(win)->view, &TabsView::OnPlusClick))
+                   ->IntoEl()
+                   ->W((float)ui->barDy)
+                   ->H(gp::kFill)
+                   ->Shrink0());
     // orig answers WM_NCHITTEST with HTCAPTION for the strip's empty area: a
     // drag there moves the window, a double-click maximizes it and a right
     // click shows the system menu. A tab dropped there leaves the window

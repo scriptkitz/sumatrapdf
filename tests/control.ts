@@ -21,9 +21,7 @@ export enum ControlCommand {
   TestInverseSearch = 22,
   TestImageResizeArrowKey = 23,
   TestFindResultPageColumnClip = 24,
-  TestFileKind = 25,
   TestScrollToLink = 26,
-  TestI18nErrorString = 27,
   TestPageInfoOverlay = 28,
   TestGetToc = 29,
   TestPageLinks = 30,
@@ -72,7 +70,6 @@ export enum ControlCommand {
   TestSelectionToolbar = 73,
   TestMarkupAnnots = 74,
   TestCmykImageSave = 75,
-  TestContextMenuPoint = 76,
   TestFindWindowContents = 77,
   TestFindUiState = 78,
   TestRenderViewPrint = 79,
@@ -97,7 +94,6 @@ export enum ControlCommand {
   TestReadingBar = 98,
   TestSeedTextSelection = 99,
   TestTtsEngineCrash = 100,
-  StartPerfLog = 101,
   StopPerfLog = 102,
   WaitSessionRestored = 103,
   TestNavFiles = 104,
@@ -142,6 +138,41 @@ export enum ControlCommand {
   // orig: [brightness, contrast] applies them to the current file as the
   // Brightness / Contrast dialog's OK does; returns the current values
   TestPageAdjust = 138,
+  // orig: urls the current markdown document's browser view was served
+  TestMarkdownServed = 139,
+  TestTemporaryFile = 140,
+  // orig: [x, y] frame client point the auto-hide sidebar takes as the cursor; x < 0 clears
+  TestSidebarCursor = 141,
+  // [destPath, pageSizeIdx, fontSize]: Convert EPUB to PDF without its dialog
+  TestConvertEpubToPdf = 142,
+  // [path, pageNo]: image element rects of a page
+  TestPageImages = 143,
+  // the first window's page and scroll position
+  TestScrollState = 144,
+  TestDrawRectSelection = 145,
+  TestEutlUpdate = 146,
+  TestFetchRevocation = 147,
+  TestSignatureStatus = 148,
+  TestTabWidths = 149,
+  TestOpenFromUrl = 150,
+  TestMigrateTab = 151,
+  TestLayers = 152,
+  TestSelectWordEdges = 153,
+  TestWordCount = 154,
+  TestPageInfoText = 155,
+  TestPageInfoBar = 156,
+  TestSelectedText = 157,
+  TestTocRows = 158,
+  TestMeasurement = 159,
+  TestImageReplace = 160,
+  // ng only: performance snapshot (cmd/port-perf.ts)
+  TestPerfStats = 161,
+  // ng only: the state of the canvas overlays
+  TestOverlayState = 162,
+  // [timeoutMs]: blocks until the home page painted after startup
+  WaitHomePainted = 163,
+  // [idx]: select tab idx; idx < 0 only reports the current tab and count
+  TestSelectTab = 164,
 }
 
 export type ControlArg = number | string | Uint8Array | ControlArg[];
@@ -163,6 +194,14 @@ export type HomeSelection = {
   // "<isPromo>,<index>" of the tip shown, and its band
   tip: string;
   tipRect: number[];
+  // a vertical scrollbar is shown for the entries
+  vbar: boolean;
+  // header row: brand (empty when hidden), Open icon + text, view-mode icons;
+  // and the tip's wrap rect
+  logo: number[];
+  open: number[];
+  views: number[];
+  tipText: number[];
   raw: string;
 };
 
@@ -568,6 +607,31 @@ export class ControlClient {
     return info;
   }
 
+  async waitForHomePainted(timeoutMs = 15000): Promise<string> {
+    const res = await this.request(ControlCommand.WaitHomePainted, [timeoutMs * SLOW_BUILD_FACTOR]);
+    const code = typeof res[0] === "number" ? res[0] : -1;
+    const info = String(res[1] ?? "");
+    if (code !== 0) {
+      throw new Error(`WaitHomePainted failed: ${info || code}`);
+    }
+    return info;
+  }
+
+  // Selects tab idx (none when idx < 0) and reports the selected tab and count.
+  async selectTab(idx = -1): Promise<{ idx: number; count: number }> {
+    const res = await this.request(ControlCommand.TestSelectTab, [idx]);
+    const code = typeof res[0] === "number" ? res[0] : -1;
+    const info = String(res[1] ?? "");
+    if (code !== 0) {
+      throw new Error(`TestSelectTab failed: ${info || code}`);
+    }
+    const m = /idx=(-?\d+) count=(\d+)/.exec(info);
+    if (!m) {
+      throw new Error(`TestSelectTab: unexpected result '${info}'`);
+    }
+    return { idx: parseInt(m[1]!, 10), count: parseInt(m[2]!, 10) };
+  }
+
   async waitForSessionRestored(timeoutMs = 15000): Promise<string> {
     const res = await this.request(ControlCommand.WaitSessionRestored, [timeoutMs * SLOW_BUILD_FACTOR]);
     const code = typeof res[0] === "number" ? res[0] : -1;
@@ -613,11 +677,16 @@ export class ControlClient {
         lastCaption: [0, 0, 0, 0],
         tip: "",
         tipRect: [0, 0, 0, 0],
+        vbar: false,
+        logo: [0, 0, 0, 0],
+        open: [0, 0, 0, 0],
+        views: [0, 0, 0, 0],
+        tipText: [0, 0, 0, 0],
         raw,
       };
     }
     const m =
-      /OK sel=(-?\d+) entries=(\d+) searchFocus=(\d) searchBox=(\d) search=(-?\d+),(-?\d+),(-?\d+),(-?\d+) outline=(-?\d+),(-?\d+),(-?\d+),(-?\d+) outlineFull=(-?\d+),(-?\d+),(-?\d+),(-?\d+) path=(.*) listView=(\d) listIcon=(-?\d+),(-?\d+),(-?\d+),(-?\d+) thumbsArea=(-?\d+),(-?\d+),(-?\d+),(-?\d+) lastCaption=(-?\d+),(-?\d+),(-?\d+),(-?\d+) tip=(\d,-?\d+) tipRect=(-?\d+),(-?\d+),(-?\d+),(-?\d+)$/.exec(
+      /OK sel=(-?\d+) entries=(\d+) searchFocus=(\d) searchBox=(\d) search=(-?\d+),(-?\d+),(-?\d+),(-?\d+) outline=(-?\d+),(-?\d+),(-?\d+),(-?\d+) outlineFull=(-?\d+),(-?\d+),(-?\d+),(-?\d+) path=(.*) listView=(\d) listIcon=(-?\d+),(-?\d+),(-?\d+),(-?\d+) thumbsArea=(-?\d+),(-?\d+),(-?\d+),(-?\d+) lastCaption=(-?\d+),(-?\d+),(-?\d+),(-?\d+) tip=(\d,-?\d+) tipRect=(-?\d+),(-?\d+),(-?\d+),(-?\d+) vbar=(\d) logo=(-?\d+),(-?\d+),(-?\d+),(-?\d+) open=(-?\d+),(-?\d+),(-?\d+),(-?\d+) views=(-?\d+),(-?\d+),(-?\d+),(-?\d+) tipText=(-?\d+),(-?\d+),(-?\d+),(-?\d+)$/.exec(
         raw,
       );
     if (!m) {
@@ -639,6 +708,11 @@ export class ControlClient {
       lastCaption: [parseInt(m[27], 10), parseInt(m[28], 10), parseInt(m[29], 10), parseInt(m[30], 10)],
       tip: m[31],
       tipRect: [parseInt(m[32], 10), parseInt(m[33], 10), parseInt(m[34], 10), parseInt(m[35], 10)],
+      vbar: m[36] === "1",
+      logo: m.slice(37, 41).map((v) => parseInt(v, 10)),
+      open: m.slice(41, 45).map((v) => parseInt(v, 10)),
+      views: m.slice(45, 49).map((v) => parseInt(v, 10)),
+      tipText: m.slice(49, 53).map((v) => parseInt(v, 10)),
       raw,
     };
   }
@@ -687,7 +761,6 @@ export class ControlClient {
   }
 
   // Visible virtual controls. className limits the dump to one window class.
-  // "hit" is the control under a client point of that class, or null.
   async virtTree(className = ""): Promise<VirtCtrlInfo[]> {
     const res = await this.request(ControlCommand.TestVirtTree, className ? [className] : []);
     const code = typeof res[0] === "number" ? res[0] : -1;
@@ -703,19 +776,6 @@ export class ControlClient {
       rows.push(parseVirtLine(line));
     }
     return rows;
-  }
-
-  async virtHit(className: string, x: number, y: number): Promise<VirtCtrlInfo | null> {
-    const res = await this.request(ControlCommand.TestVirtTree, ["hit", className, x, y]);
-    const code = typeof res[0] === "number" ? res[0] : -1;
-    const raw = String(res[1] ?? "").trim();
-    if (code !== 0) {
-      throw new Error(`TestVirtTree hit failed: ${raw || code}`);
-    }
-    if (!raw || raw === "NONE") {
-      return null;
-    }
-    return parseVirtLine(raw);
   }
 
   // Notifications are drawn over the document and linger for ~2s, so a test

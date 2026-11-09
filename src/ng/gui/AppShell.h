@@ -7,6 +7,7 @@
 namespace gpui {
 struct App;
 struct Window;
+struct MouseMoveEvent;
 } // namespace gpui
 
 struct MainWindow;
@@ -50,6 +51,7 @@ void AppShellSuppressAltMenu(MainWindow* win);
 void AppShellQuit();
 // brings the window to the foreground (orig's MainWindow::Focus())
 void AppShellActivateWindow(MainWindow* win);
+void AppShellMinimizeWindow(MainWindow* win);
 bool AppShellIsFrameFocused(MainWindow* win);
 void AppShellFocusFrame(MainWindow* win);
 void AppShellClearEatChar(MainWindow* win);
@@ -65,6 +67,7 @@ TempStr AppShellPromptForFileTemp(MainWindow* win);
 // the same prompt with a title of its own (certificate, image, ...); filter is
 // orig's lpstrFilter with \1 for \0, which only Windows' dialog can apply
 TempStr AppShellPromptForPathTemp(MainWindow* win, Str title, Str filter, Str initialPath = {});
+TempStr AppShellPromptForFolderTemp(MainWindow* win, Str title);
 // false on a Linux without zenity / kdialog, which gpui's prompt runs
 bool AppShellHasOsFilePicker();
 // ng: where the platform's open prompt cannot answer at once (the browser's
@@ -94,6 +97,8 @@ bool AppShellCaptionRects(MainWindow* win, Rect* menuOut, Rect* tabsOut, int* dy
 bool AppShellSysMenuRect(MainWindow* win, Rect* out);
 // the border the frame keeps around its content while it has the caption
 int AppShellFrameBorder(MainWindow* win);
+bool AppShellSidebarFloats(MainWindow* win);
+void AppShellSidebarCanvasMove(MainWindow* win, const gpui::MouseMoveEvent* ev);
 // gpui's client-side title bar for the frame, without touching the flag
 // (fullscreen has no caption of either kind)
 void AppShellSetClientTitleBar(MainWindow* win, bool on);
@@ -161,6 +166,10 @@ void AppShellOpenDocsReady();
 #endif
 // presentation mode's auto-hidden cursor (orig hides it with SetCursor(null))
 void AppShellShowCursor(MainWindow* win, bool show);
+// The shell tick drops to a slow cadence while the window is idle. Call this
+// when motion starts from an input handler, so it does not wait out that
+// cadence for the first frame.
+void AppShellRequestFastTick(MainWindow* win);
 // Fullscreen.PreventSleep: keep the display awake (Windows only for now)
 void AppShellPreventSleep(bool on);
 #if OS_WIN

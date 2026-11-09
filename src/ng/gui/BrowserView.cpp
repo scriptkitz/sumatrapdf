@@ -10,6 +10,7 @@
 // chrome.webview.postMessage (window.ipc on mac and Linux).
 
 #include "gui/GpuiBridge.h"
+#include "VirtKeys.h"
 
 #include "base/GuessFileType.h"
 #include "base/Win.h"
@@ -24,6 +25,9 @@
 #include "gui/AppShell.h"
 #include "gui/BrowserView.h"
 #include "BrowserViewCommon.h"
+#if OS_WIN
+#include "WebViewCapture.h"
+#endif
 
 #include "SumatraLog.h"
 
@@ -130,8 +134,17 @@ struct BrowserView {
 
 static Vec<BrowserView*> gBrowserViews;
 
+// Asked while building every frame's command context, so the answer is kept
+// for two seconds: finding the WebView2 runtime reads the registry each time.
 bool BrowserViewAvailable() {
-    return wry::WebViewAvailable();
+    static double checkedAt = -1;
+    static bool available = false;
+    double now = gp::TimeNow();
+    if (checkedAt < 0 || now - checkedAt >= 2.0) {
+        available = wry::WebViewAvailable();
+        checkedAt = now;
+    }
+    return available;
 }
 
 static wry::WebView* Raw(BrowserView* bv) {
@@ -434,10 +447,6 @@ void BrowserViewSetVisible(BrowserView* bv, bool visible) {
     }
 }
 
-bool BrowserViewIsVisible(BrowserView* bv) {
-    return bv && bv->visible;
-}
-
 void BrowserViewRefreshSurface(BrowserView*) {}
 
 // --- navigation -------------------------------------------------------------
@@ -563,6 +572,27 @@ void BrowserViewCopySelection(BrowserView* bv) {
     Eval(bv, StrL("document.execCommand('copy', false, null)"));
 }
 
+#if OS_WIN
+// async png of the visible page; false if not supported (done is then not called)
+bool BrowserViewCapturePng(BrowserView* bv, const Func1<Str>& done) {
+    auto* controller = (ICoreWebView2Controller*)wry::WebViewControllerRaw(Raw(bv));
+    HWND hwnd = nullptr;
+    ICoreWebView2* webview = nullptr;
+    if (!controller || FAILED(controller->get_ParentWindow(&hwnd)) || FAILED(controller->get_CoreWebView2(&webview))) {
+        return false;
+    }
+    bool ok = WebView2CapturePng(webview, hwnd, done);
+    if (webview) {
+        webview->Release();
+    }
+    return ok;
+}
+#else
+bool BrowserViewCapturePng(BrowserView*, const Func1<Str>&) {
+    return false;
+}
+#endif
+
 void BrowserViewPrint(BrowserView* bv, bool) {
     Eval(bv, StrL("window.print()"));
 }
@@ -641,6 +671,38 @@ void BrowserViewFindClear(BrowserView* bv) {
 // one arrow key, in CSS pixels. A page key uses the window height instead.
 constexpr int kBrowserArrowStep = 40;
 
+void BrowserViewScrollKey(BrowserView* bv, int vk) {
+    if (!bv || !Raw(bv)) {
+        return;
+    }
+    switch (vk) {
+        case VK_DOWN:
+            Eval(bv, fmt("window.scrollBy(0, %d)", kBrowserArrowStep));
+            break;
+        case VK_UP:
+            Eval(bv, fmt("window.scrollBy(0, %d)", -kBrowserArrowStep));
+            break;
+        case VK_RIGHT:
+            Eval(bv, fmt("window.scrollBy(%d, 0)", kBrowserArrowStep));
+            break;
+        case VK_LEFT:
+            Eval(bv, fmt("window.scrollBy(%d, 0)", -kBrowserArrowStep));
+            break;
+        case VK_NEXT:
+            Eval(bv, StrL("window.scrollBy(0, window.innerHeight || 400)"));
+            break;
+        case VK_PRIOR:
+            Eval(bv, StrL("window.scrollBy(0, -(window.innerHeight || 400))"));
+            break;
+        case VK_HOME:
+            Eval(bv, StrL("window.scrollTo(0, 0)"));
+            break;
+        case VK_END:
+            Eval(bv, StrL("window.scrollTo(0, document.documentElement.scrollHeight)"));
+            break;
+    }
+}
+
 // Chromium ignores WM_MOUSEWHEEL on the host window, and an arrow key sent to
 // the frame never reaches the page. Both scroll from here.
 LRESULT BrowserViewPassUIMsg(BrowserView* bv, UINT msg, WPARAM wp, LPARAM) {
@@ -649,32 +711,7 @@ LRESULT BrowserViewPassUIMsg(BrowserView* bv, UINT msg, WPARAM wp, LPARAM) {
         return 0;
     }
     if (msg == WM_KEYDOWN) {
-        switch ((int)wp) {
-            case VK_DOWN:
-                Eval(bv, fmt("window.scrollBy(0, %d)", kBrowserArrowStep));
-                break;
-            case VK_UP:
-                Eval(bv, fmt("window.scrollBy(0, %d)", -kBrowserArrowStep));
-                break;
-            case VK_RIGHT:
-                Eval(bv, fmt("window.scrollBy(%d, 0)", kBrowserArrowStep));
-                break;
-            case VK_LEFT:
-                Eval(bv, fmt("window.scrollBy(%d, 0)", -kBrowserArrowStep));
-                break;
-            case VK_NEXT:
-                Eval(bv, StrL("window.scrollBy(0, window.innerHeight || 400)"));
-                break;
-            case VK_PRIOR:
-                Eval(bv, StrL("window.scrollBy(0, -(window.innerHeight || 400))"));
-                break;
-            case VK_HOME:
-                Eval(bv, StrL("window.scrollTo(0, 0)"));
-                break;
-            case VK_END:
-                Eval(bv, StrL("window.scrollTo(0, document.documentElement.scrollHeight)"));
-                break;
-        }
+        BrowserViewScrollKey(bv, (int)wp);
         return 0;
     }
     if (msg == WM_KEYUP) {
@@ -734,7 +771,7 @@ static void CreateWebView(BrowserView* bv, gp::Ctx* cx) {
     attrs.customProtocols = &protocol;
     attrs.customProtocolCount = 1;
     attrs.initializationScripts = scripts;
-    attrs.initializationScriptCount = 3;
+    attrs.initializationScriptCount = dimofi(scripts);
     attrs.ctx = bv;
     attrs.navigationHandler = OnNavigationStarting;
     attrs.onPageLoadHandler = OnPageLoad;

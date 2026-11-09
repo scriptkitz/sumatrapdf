@@ -49,12 +49,9 @@ RefHoverState* RefHoverCreate(MainWindow* win) {
     return s;
 }
 
-void RefHoverDestroy(RefHoverState* s) {
-    if (!s) {
-        return;
-    }
-    RefHoverUnregisterLiveState(s);
-    RefHoverDropQueuedRender(s);
+// the shown strip and the engine it was hit-tested with: kept, the engine
+// would hold a closed document's file open
+static void RefHoverReleaseShown(RefHoverState* s) {
     RefHoverFreeRenderImage(s);
     FreePixmap(s->bmp);
     s->bmp = nullptr;
@@ -62,6 +59,15 @@ void RefHoverDestroy(RefHoverState* s) {
         s->hitEngine->Release();
         s->hitEngine = nullptr;
     }
+}
+
+void RefHoverDestroy(RefHoverState* s) {
+    if (!s) {
+        return;
+    }
+    RefHoverUnregisterLiveState(s);
+    RefHoverDropQueuedRender(s);
+    RefHoverReleaseShown(s);
     RefHoverFreeLookupCache(s);
     delete s;
 }
@@ -73,8 +79,8 @@ void RefHoverSchedule(RefHoverState* s, int delayMs, Point screenPt, int destPag
     if (!s || delayMs < 0) {
         return;
     }
-    s->showLeftMs = -1;
-    s->hideLeftMs = -1;
+    s->showTimer.Cancel();
+    s->hideTimer.Cancel();
 
     bool sameSrc = s->displayed.srcPage == srcPage && s->displayed.srcRect == srcRect;
     if (s->visible && s->displayed.destPageRaw == destPage && s->displayed.destX == destX &&
@@ -86,21 +92,22 @@ void RefHoverSchedule(RefHoverState* s, int delayMs, Point screenPt, int destPag
     s->pending.destX = destX;
     s->pending.destY = destY;
     s->pending.destZoom = destZoom;
+    s->pending.noteRef = false;
     s->pending.srcPage = srcPage;
     s->pending.srcRect = srcRect;
     s->pending.pageScreenRect = pageScreenRect;
     if (s->visible) {
         delayMs = 0;
     }
-    s->showLeftMs = delayMs;
+    s->showTimer.Arm(delayMs);
 }
 
 void RefHoverHide(RefHoverState* s) {
     if (!s) {
         return;
     }
-    s->showLeftMs = -1;
-    s->hideLeftMs = -1;
+    s->showTimer.Cancel();
+    s->hideTimer.Cancel();
     s->pending.destPage = -1;
     s->renderGen++;
     RefHoverDropQueuedRender(s);
@@ -109,6 +116,7 @@ void RefHoverHide(RefHoverState* s) {
         s->displayed.destPage = -1;
         AppShellInvalidate(s->win);
     }
+    RefHoverReleaseShown(s);
 }
 
 static constexpr int kRefHoverHidePollMs = 150;
@@ -121,7 +129,7 @@ void RefHoverScheduleHide(RefHoverState* s, int delayMs) {
     if (!s) {
         return;
     }
-    s->showLeftMs = -1;
+    s->showTimer.Cancel();
     s->pending.destPage = -1;
     s->renderGen++;
     RefHoverDropQueuedRender(s);
@@ -130,7 +138,7 @@ void RefHoverScheduleHide(RefHoverState* s, int delayMs) {
         return;
     }
     delayMs = std::max(delayMs, kRefHoverHideMinMs);
-    s->hideLeftMs = delayMs;
+    s->hideTimer.Arm(delayMs);
 }
 
 // Fired by the hide timer: hides the popup unless the cursor is now over it
@@ -139,12 +147,12 @@ void RefHoverOnHideTimer(RefHoverState* s) {
     if (!s) {
         return;
     }
-    s->hideLeftMs = -1;
+    s->hideTimer.Cancel();
     if (!s->visible) {
         return;
     }
     if (s->cursorOverPopup) {
-        s->hideLeftMs = kRefHoverHidePollMs;
+        s->hideTimer.Arm(kRefHoverHidePollMs);
         return;
     }
     s->visible = false;
@@ -177,20 +185,12 @@ void RefHoverTick(MainWindow* win, int elapsedMs) {
     if (!s) {
         return;
     }
-    if (s->hideLeftMs >= 0) {
-        s->hideLeftMs -= elapsedMs;
-        if (s->hideLeftMs <= 0) {
-            RefHoverOnHideTimer(s);
-        }
+    if (s->hideTimer.Tick(elapsedMs)) {
+        RefHoverOnHideTimer(s);
     }
-    if (s->showLeftMs < 0) {
+    if (!s->showTimer.Tick(elapsedMs)) {
         return;
     }
-    s->showLeftMs -= elapsedMs;
-    if (s->showLeftMs > 0) {
-        return;
-    }
-    s->showLeftMs = -1;
     DisplayModel* dm = win->AsFixed();
     int destPage = s->pending.destPage;
     if (!dm || !dm->ValidPageNo(destPage)) {
@@ -230,15 +230,43 @@ TempStr RefHoverResultTemp(Str action, int x, int y, int* exitCodeOut) {
         }
         RefHoverOnCanvasMouseMove(win->refHover, win, win->ctrl, win->linkHandler, dm, doc.x, doc.y, el, srcPage, 0);
         RefHoverState* s = win->refHover;
-        if (!s || (s->showLeftMs < 0 && !s->visible)) {
+        if (!s || (!s->showTimer.IsArmed() && !s->visible)) {
             if (exitCodeOut) {
                 *exitCodeOut = 1;
             }
             return fmt("ERROR no-link x=%d y=%d", x, y);
         }
-        if (s->showLeftMs >= 0) {
+        if (s->showTimer.IsArmed()) {
             RefHoverTick(win, 1000);
         }
+    }
+    // frame point of the current page's x-th EPUB footnote link, to click
+    if (str::Eq(action, StrL("noteref")) && dm) {
+        float k = CanvasScale(win);
+        if (k <= 0.f) {
+            k = 1.f;
+        }
+        int pageNo = dm->CurrentPageNo();
+        int n = 0;
+        for (IPageElement* el : dm->GetEngine()->GetElements(pageNo)) {
+            IPageDestination* dest = el && el->Is(kindPageElementDest) ? el->AsLink() : nullptr;
+            if (!dest || !dest->isNoteRef) {
+                continue;
+            }
+            // skip the zero-width link mupdf adds at the <a>'s anchor
+            RectF r = el->GetRect();
+            if (r.dx <= 0.f || n++ < x) {
+                continue;
+            }
+            Point pt = dm->CvtToScreen(pageNo, PointF(r.x + (r.dx / 2), r.y + (r.dy / 2)));
+            int fx = (int)((float)win->canvasRc.x / k) + pt.x;
+            int fy = (int)((float)win->canvasRc.y / k) + pt.y;
+            return fmt("OK noteref=%d,%d page=%d scale=%.4f", fx, fy, pageNo, (double)k);
+        }
+        if (exitCodeOut) {
+            *exitCodeOut = 1;
+        }
+        return fmt("ERROR no-noteref page=%d", pageNo);
     }
     RefHoverState* s = win ? win->refHover : nullptr;
     if (!s || !s->visible) {
@@ -252,6 +280,6 @@ TempStr RefHoverResultTemp(Str action, int x, int y, int* exitCodeOut) {
     }
     int popX = (int)((float)win->canvasRc.x / k + (float)s->popupRc.x + (float)s->popupRc.dx / 2.f);
     int popY = (int)((float)win->canvasRc.y / k + (float)s->popupRc.y + (float)s->popupRc.dy / 2.f);
-    return fmt("OK visible=1 page=%d y=%d zoom=%d pop=%d,%d scale=%.4f", d.destPage, (int)d.region.y,
-               (int)(d.userZoom * 100), popX, popY, (double)k);
+    return fmt("OK visible=1 page=%d y=%d zoom=%d pop=%d,%d scale=%.4f x=%d", d.destPage, (int)d.region.y,
+               (int)(d.userZoom * 100), popX, popY, (double)k, (int)d.region.x);
 }

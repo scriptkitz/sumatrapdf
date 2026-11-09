@@ -50,6 +50,7 @@
 #include "Notifications.h"
 #include "MainWindow.h"
 #include "AnnotPlacement.h"
+#include "AIChatTypes.h"
 #include "WindowTab.h"
 #include "UpdateCheck.h"
 #include "Commands.h"
@@ -78,6 +79,7 @@
 #include "StressTesting.h"
 #include "HomePage.h"
 #include "DocumentProperties.h"
+#include "DocumentPropertiesCommon.h"
 #include "TabGroupsManage.h"
 #include "TableOfContents.h"
 #include "Tabs.h"
@@ -110,11 +112,10 @@
 #include "SumatraPDF.h"
 #include "PerfLog.h"
 #include "SumatraPDFCommon.h"
+#include "RestrictedUseConfig.h"
 #include "VirtualDesktop.h"
 
 #include "SumatraLog.h"
-
-constexpr const char* kRestrictionsFileName = "sumatrapdfrestrict.ini";
 
 // in restricted mode, some features can be disabled (such as
 // opening files, printing, following URLs), so that SumatraPDF
@@ -195,13 +196,12 @@ void InitializePolicies(bool restrict) {
 
     static Perm perms[] = {Perm::InternetAccess, Perm::DiskAccess,    Perm::SavePreferences,  Perm::RegistryAccess,
                            Perm::PrinterAccess,  Perm::CopySelection, Perm::FullscreenAccess, Perm::AIChat};
-    static SeqStrings permNames =
-        "InternetAccess\0DiskAccess\0SavePreferences\0RegistryAccess\0PrinterAccess\0CopySelection\0"
-        "FullscreenAccess\0AIChat\0";
+    // names come from the editor's table, so both read and write the same keys
+    static_assert(dimof(perms) == kRestrictedUseFeatureCount);
 
     // enable policies as indicated in sumatrapdfrestrict.ini
     for (int i = 0; i < dimofi(perms); i++) {
-        Str name = SeqStrByIndex(permNames, i);
+        Str name = RestrictedUseFeatureName(i);
         Str val = polsec->GetValue(name);
         if (val && ParseInt(val) != 0) {
             gPolicyRestrictions = gPolicyRestrictions | perms[i];
@@ -335,10 +335,6 @@ int ToolbarModeFromPrefs() {
     return idx;
 }
 
-bool ToolbarModeIsOverlay() {
-    return ToolbarModeFromPrefs() == kToolbarOverlay;
-}
-
 bool ToolbarModeIsHidden() {
     return ToolbarModeFromPrefs() == kToolbarHide;
 }
@@ -429,7 +425,10 @@ static int CollectPageInfoPages(DocController* ctrl, int pageNo, int* pagesOut, 
     return n;
 }
 
-void UpdatePageInfoHelper(DocController* ctrl, NotificationWnd* wnd, int pageNo) {
+// "Page: 37 / 120 (31%) · 100%", starting with the file name in full screen
+// and presentation, where no title bar or tab shows it (#6492)
+void UpdatePageInfoHelper(MainWindow* win, NotificationWnd* wnd, int pageNo) {
+    DocController* ctrl = win->ctrl;
     if (!ctrl->ValidPageNo(pageNo)) {
         pageNo = ctrl->CurrentPageNo();
     }
@@ -445,6 +444,13 @@ void UpdatePageInfoHelper(DocController* ctrl, NotificationWnd* wnd, int pageNo)
         pageInfo = fmt("%s %s (%d / %d)", Tr("Page:"), label, pageNo, nPages);
     } else {
         pageInfo = fmt("%s %d / %d", Tr("Page:"), pageNo, nPages);
+    }
+    // of the whole document, also for a chaptered ebook
+    int percentRead = (pageNo * 100) / std::max(nPages, 1);
+    pageInfo = fmt("%s (%d%%)", pageInfo, percentRead);
+    if (win->IsFullScreenOrPresentation()) {
+        TempStr fileName = path::GetBaseNameTemp(ctrl->GetFilePath());
+        pageInfo = str::JoinTemp(fileName, StrL(kPageInfoSep), pageInfo);
     }
     float zoomLevel = ctrl->GetZoomVirtual();
     auto zoomStr = BuildZoomString(zoomLevel);
@@ -516,6 +522,218 @@ void UpdatePageInfoHelper(DocController* ctrl, NotificationWnd* wnd, int pageNo)
     NotificationUpdateMessage(wnd, pageInfo);
 }
 
+//--- the page info bar (PageInfoLocation = bottom / bottom-overlay, #6494)
+
+PageInfoBarMode GetPageInfoBarMode() {
+    Str loc = gSettings->pageInfoLocation;
+    if (str::EqI(loc, StrL("bottom"))) {
+        return PageInfoBarMode::Bottom;
+    }
+    if (str::EqI(loc, StrL("bottom-overlay"))) {
+        return PageInfoBarMode::BottomOverlay;
+    }
+    return PageInfoBarMode::Notification;
+}
+
+// the bar replaces the page info tip; Toggle Page Info shows and hides it
+bool PageInfoBarShown(MainWindow* win) {
+    if (!win || !win->pageInfoWanted || GetPageInfoBarMode() == PageInfoBarMode::Notification) {
+        return false;
+    }
+    if (!win->IsDocLoaded() || !win->ctrl) {
+        return false;
+    }
+    return win->windowMode != WindowMode::PresentationBlack && win->windowMode != WindowMode::PresentationWhite;
+}
+
+// the left half only changes with the document, and reads the disk and the
+// document's properties: built once per document
+struct PageInfoBarFileCache {
+    DocController* ctrl = nullptr;
+    Str path;
+    Str left;
+};
+static PageInfoBarFileCache gPageInfoBarCache;
+
+static void AppendBarPart(str::Builder& out, Str part) {
+    if (len(part) == 0) {
+        return;
+    }
+    if (len(out) > 0) {
+        out.Append(StrL(kPageInfoSep));
+    }
+    out.Append(part);
+}
+
+// "PDF 1.7", "EPUB", "Folder"
+static TempStr FileFormatNameTemp(DocController* ctrl, EngineBase* engine) {
+    Str path = ctrl->GetFilePath();
+    if (engine && engine->kind == kindEngineMupdf) {
+        TempStr ver = engine->GetPropertyTemp(DocProp::PdfVersion);
+        if (len(ver) > 0) {
+            return fmt("PDF %s", ver);
+        }
+    }
+    if (engine && engine->kind == kindEngineImageDir) {
+        return str::DupTemp(Tr("Folder"));
+    }
+    TempStr ext = path::GetExtTemp(path);
+    if (len(ext) < 2) {
+        return {};
+    }
+    TempStr res = str::DupTemp(Str(ext.s + 1, len(ext) - 1));
+    str::ToUpperInPlace(res);
+    return res;
+}
+
+// file name · format · file size · pages · what the document has
+static TempStr PageInfoBarLeftTemp(DocController* ctrl) {
+    Str path = ctrl->GetFilePath();
+    DisplayModel* dm = ctrl->AsFixed();
+    EngineBase* engine = dm ? dm->GetEngine() : nullptr;
+    str::Builder out;
+    AppendBarPart(out, path::GetBaseNameTemp(path));
+    AppendBarPart(out, FileFormatNameTemp(ctrl, engine));
+    bool isDir = engine && engine->kind == kindEngineImageDir;
+    i64 size = isDir ? -1 : file::GetSize(path);
+    if (size >= 0) {
+        AppendBarPart(out, str::FormatSizeShortTemp(size));
+    }
+    if (!engine) {
+        return ToStrTemp(out);
+    }
+
+    bool isImage = engine->kind == kindEngineImage;
+    bool isComic = IsEngineImages(engine) && !isImage;
+    bool isEbook = ShowChapterUi(ctrl) || engine->kind == kindEngineEpub || engine->kind == kindEngineFb2 ||
+                   engine->kind == kindEngineMobi || engine->kind == kindEnginePdb;
+    if (!isImage && !isEbook) {
+        AppendBarPart(out, fmt(Tr("%d pages").s, engine->PageCount()));
+    }
+    if (engine->kind == kindEngineMupdf) {
+        if (EngineMupdfIsEncrypted(engine)) {
+            AppendBarPart(out, Tr("Encrypted"));
+        }
+        if (EngineMupdfCountSignedSignatures(engine) > 0) {
+            AppendBarPart(out, Tr("Signed"));
+        }
+        if (EngineMupdfHasLayers(engine)) {
+            AppendBarPart(out, Tr("Has layers"));
+        }
+    }
+    if (isEbook || isComic) {
+        AppendBarPart(out, engine->GetPropertyTemp(DocProp::Title));
+        AppendBarPart(out, engine->GetPropertyTemp(DocProp::Author));
+    }
+    if (isImage) {
+        AppendBarPart(out, engine->GetPropertyTemp(DocProp::CameraModel));
+        AppendBarPart(out, engine->GetPropertyTemp(DocProp::DateOriginal));
+    }
+    return ToStrTemp(out);
+}
+
+// "4032 × 3024 px"
+static TempStr PixelSizeTemp(RectF box) {
+    int w = (int)lroundf(box.dx);
+    int h = (int)lroundf(box.dy);
+    if (w <= 0 || h <= 0) {
+        return {};
+    }
+    return fmt("%d \xC3\x97 %d px", w, h);
+}
+
+// page · page size · rotation · zoom, or what an image / comic page is
+static TempStr PageInfoBarRightTemp(MainWindow* win) {
+    DocController* ctrl = win->ctrl;
+    if (IsBrowserDocController(ctrl)) {
+        return {};
+    }
+    DisplayModel* dm = ctrl->AsFixed();
+    EngineBase* engine = dm ? dm->GetEngine() : nullptr;
+    int pageNo = ctrl->CurrentPageNo();
+    int nPages = ctrl->PageCount();
+    int percentRead = (pageNo * 100) / std::max(nPages, 1);
+    str::Builder out;
+    bool isImage = engine && engine->kind == kindEngineImage;
+
+    if (isImage) {
+        // a single image: its pixels and, when it says, its print size
+        AppendBarPart(out, PixelSizeTemp(engine->PageMediabox(pageNo)));
+        float dpi = engine->fileDPI;
+        if (dpi > 0.5f && fabsf(dpi - 96.0f) > 0.5f) {
+            AppendBarPart(out, fmt("%.0f DPI", dpi));
+            RectF box = engine->PageMediabox(pageNo);
+            AppendBarPart(out, FormatSizeInLocaleUnitTemp(SizeF{box.dx / dpi, box.dy / dpi}));
+        }
+        if (nPages > 1) {
+            AppendBarPart(out, fmt(Tr("Frame %d / %d").s, pageNo, nPages));
+        }
+    } else if (ShowChapterUi(ctrl)) {
+        Location loc = ctrl->LocationFromPageNo(pageNo);
+        AppendBarPart(out, fmt(Tr("Chapter %d / %d").s, loc.chapter, ctrl->ChapterCount()));
+        AppendBarPart(out, fmt(Tr("Page %d / %d").s, loc.page, ctrl->ChapterPageCount(loc.chapter)));
+        AppendBarPart(out, fmt("%d%%", percentRead));
+    } else {
+        TempStr label = ctrl->HasPageLabels() ? ctrl->GetPageLabeTemp(pageNo) : TempStr{};
+        if (len(label) > 0 && !str::Eq(label, fmt("%d", pageNo))) {
+            AppendBarPart(out, fmt(Tr("Page %s (%d / %d, %d%%)").s, label, pageNo, nPages, percentRead));
+        } else {
+            AppendBarPart(out, fmt(Tr("Page %d / %d (%d%%)").s, pageNo, nPages, percentRead));
+        }
+    }
+
+    if (engine && IsEngineImages(engine) && !isImage) {
+        // comic / image folder: each visible image's name, pixels and bytes
+        int pages[2] = {};
+        int nShow = CollectPageInfoPages(ctrl, pageNo, pages, 2);
+        for (int i = 0; i < nShow; i++) {
+            TempStr imgName{};
+            i64 imgSize = -1;
+            if (!EngineImagesGetPageFileInfo(engine, pages[i], &imgName, &imgSize)) {
+                continue;
+            }
+            AppendBarPart(out, imgName);
+            AppendBarPart(out, PixelSizeTemp(engine->PageMediabox(pages[i])));
+            if (imgSize >= 0) {
+                AppendBarPart(out, str::FormatSizeShortTemp(imgSize));
+            }
+        }
+    } else if (engine && !isImage && !ShowChapterUi(ctrl)) {
+        AppendBarPart(out, FormatPageSizeShortTemp(engine, pageNo, dm->GetRotation()));
+        int djvuDpi = EngineDjvuDecPageDpi(engine, pageNo);
+        if (djvuDpi > 0) {
+            RectF box = engine->PageMediabox(pageNo);
+            float scale = (float)djvuDpi / engine->fileDPI;
+            AppendBarPart(out, PixelSizeTemp(RectF(0, 0, box.dx * scale, box.dy * scale)));
+            AppendBarPart(out, fmt("%d DPI", djvuDpi));
+        }
+        int rotation = dm->GetRotation();
+        if (rotation != 0) {
+            AppendBarPart(out, fmt(Tr("Rotated %d\xC2\xB0").s, rotation));
+        }
+    }
+    AppendBarPart(out, BuildZoomString(ctrl->GetZoomVirtual()));
+    return ToStrTemp(out);
+}
+
+// the bar's two halves: the file on the left, the current page on the right
+void PageInfoBarTextTemp(MainWindow* win, TempStr* leftOut, TempStr* rightOut) {
+    *leftOut = {};
+    *rightOut = {};
+    if (!win || !win->IsDocLoaded() || !win->ctrl) {
+        return;
+    }
+    DocController* ctrl = win->ctrl;
+    PageInfoBarFileCache& c = gPageInfoBarCache;
+    if (c.ctrl != ctrl || !str::Eq(c.path, ctrl->GetFilePath())) {
+        c.ctrl = ctrl;
+        str::ReplaceWithCopy(&c.path, ctrl->GetFilePath());
+        str::ReplaceWithCopy(&c.left, PageInfoBarLeftTemp(ctrl));
+    }
+    *leftOut = str::DupTemp(c.left);
+    *rightOut = PageInfoBarRightTemp(win);
+}
+
 // Markdown and HTML both render in the WebView2 browser view via MarkdownModel,
 // each gated by its own UseFixedPageUI opt-out (fall back to MuPDF/ebook engines).
 bool ShouldUseBrowserView(FileType kind) {
@@ -526,6 +744,13 @@ bool ShouldUseBrowserView(FileType kind) {
         return !gSettings->markdownUI.useFixedPageUI;
     }
     return false;
+}
+
+// html shown in the browser view gets its thumbnail from a picture of the page
+// (SetThumbnailFromImage): MuPDF lays html out differently and drops images
+static bool IsBrowserCapturedThumbnail(Str path) {
+    FileType kind = GuessFileTypeFromName(path);
+    return MarkdownModel::IsHtmlFileType(kind) && ShouldUseBrowserView(kind);
 }
 
 bool showTocByDefault(Str path, EngineBase* engine) {
@@ -546,7 +771,8 @@ bool showTocByDefault(Str path, EngineBase* engine) {
 
 bool IsEbookFileType(FileType ft) {
     return ft == FileType::Epub || ft == FileType::Mobi || ft == FileType::Fb2 || ft == FileType::Fb2z ||
-           ft == FileType::PalmDoc || ft == FileType::HTML || ft == FileType::Txt || ft == FileType::Lit;
+           ft == FileType::PalmDoc || ft == FileType::HTML || ft == FileType::Txt || ft == FileType::Lit ||
+           ft == FileType::Rtf;
 }
 
 // Per-type DefaultDisplayMode (empty = inherit the global DefaultDisplayMode).
@@ -711,9 +937,11 @@ bool AppendFileFilterForDoc(DocController* ctrl, str::Builder& fileFilter) {
         fileFilter.Append(fmt(Tr("Image files (*.%s)").s, imgDefExt));
     } else if (type == kindEngineImageDir) {
         return false; // only show "All files"
-    } else if (type == kindEnginePostScript || type == kindEngineDvi) {
+    } else if (type == kindEnginePostScript || type == kindEngineDvi || type == kindEngineCaj) {
         // also offer the PDF the converter produced (SaveFileAs writes it)
-        if (type == kindEngineDvi) {
+        if (type == kindEngineCaj) {
+            fileFilter.Append(Tr("CAJ documents"));
+        } else if (type == kindEngineDvi) {
             fileFilter.Append(Tr("DVI documents"));
         } else {
             fileFilter.Append(Tr("PostScript documents"));
@@ -810,6 +1038,38 @@ void ClearPendingNextPrevNav() {
     gPendingNextPrevNav = nullptr;
 }
 
+// next / prev file asked for while the folder scan runs: done when it ends
+void DeferNextPrevNav(MainWindow* win, WindowTab* tab, bool forward, Str pathToDelete) {
+    ClearPendingNextPrevNav();
+    auto* p = new PendingNextPrevNav;
+    p->win = win;
+    p->tab = tab;
+    p->forward = forward;
+    p->path = str::Dup(tab->filePath);
+    p->pathToDelete = str::Dup(pathToDelete);
+    gPendingNextPrevNav = p;
+}
+
+// the scan ended: navigate, unless the user moved to another tab or document
+// meanwhile, which the request no longer applies to
+void ReplayPendingNextPrevNav() {
+    PendingNextPrevNav* p = gPendingNextPrevNav;
+    if (!p) {
+        return;
+    }
+    gPendingNextPrevNav = nullptr;
+    AutoDelete delP(p);
+    MainWindow* win = p->win;
+    if (!IsMainWindowValidAndNotClosing(win)) {
+        return;
+    }
+    WindowTab* tab = win->CurrentTab();
+    if (tab != p->tab || win->IsCurrentTabAbout() || !str::Eq(tab->filePath, p->path)) {
+        return;
+    }
+    OpenNextPrevFileInFolder(win, p->forward, p->pathToDelete);
+}
+
 bool IsAtDocumentBottom(MainWindow* win) {
     DocController* ctrl = win->ctrl;
     if (!ctrl) {
@@ -844,6 +1104,199 @@ void ToggleMangaMode(MainWindow* win) {
     ScrollState state = dm->GetScrollState();
     dm->Relayout(dm->GetZoomVirtual(), dm->GetRotation());
     dm->SetScrollState(state);
+}
+
+// CmdToggleFacingStepOne (#6487): turning it on in single page or continuous
+// view switches to Facing (or Book View), where it applies
+void ToggleFacingStepOne(MainWindow* win) {
+    DisplayModel* dm = win->AsFixed();
+    if (!dm) {
+        return;
+    }
+    bool enable = !dm->GetFacingStepOne();
+    dm->SetFacingStepOne(enable);
+    DisplayMode mode = dm->GetDisplayMode();
+    if (!enable || (!IsSingle(mode) && !IsContinuous(mode))) {
+        return;
+    }
+    SwitchToDisplayMode(win, IsBookView(mode) ? DisplayMode::BookView : DisplayMode::Facing);
+}
+
+static Kind kNotifWordCount = "notifWordCount";
+constexpr int kWordCountResultTimeoutMs = 10 * 1000;
+constexpr int kWordCountProgressMs = 200;
+
+// bumped to cancel a running whole-document count
+static AtomicInt gWordCountGen = 0;
+
+struct WordCountProgress {
+    MainWindow* win = nullptr;
+    WindowTab* tab = nullptr;
+    int gen = 0;
+    int pagesDone = 0;
+    int pageCount = 0;
+    WordCount wc;
+};
+
+struct WordCountThreadData {
+    WordCountProgress progress;
+    EngineBase* engine = nullptr;
+};
+
+static TempStr WordCountMsgTemp(const WordCount& wc) {
+    return fmt(Tr("Words: %d, characters (no spaces): %d").s, wc.words, wc.chars);
+}
+
+static void OnWordCountProgress(WordCountProgress* p) {
+    bool valid = AtomicIntGet(&gWordCountGen) == p->gen && IsMainWindowValid(p->win) && IsWindowTabValid(p->tab);
+    NotificationWnd* wnd = valid ? GetNotificationForGroup(p->win, kNotifWordCount) : nullptr;
+    if (!wnd) {
+        delete p;
+        return;
+    }
+    if (p->pagesDone < p->pageCount) {
+        int perc = CalcPerc(p->pagesDone, p->pageCount);
+        TempStr msg = fmt(Tr("Counting words: page %d of %d...").s, p->pagesDone, p->pageCount);
+        UpdateNotificationProgress(wnd, msg, perc);
+    } else {
+        NotificationUpdateMessage(wnd, WordCountMsgTemp(p->wc), kWordCountResultTimeoutMs);
+    }
+    delete p;
+}
+
+static void PostWordCountProgress(const WordCountProgress& p) {
+    auto copy = new WordCountProgress(p);
+    uitask::Post(MkFunc0(OnWordCountProgress, copy), "WordCountProgress");
+}
+
+static void WordCountThread(WordCountThreadData* d) {
+    WordCountProgress& p = d->progress;
+    auto lastPost = TimeGet();
+    for (int pageNo = 1; pageNo <= p.pageCount; pageNo++) {
+        if (AtomicIntGet(&gWordCountGen) != p.gen) {
+            break;
+        }
+        CountWords(d->engine->GetTextForPage(pageNo), p.wc);
+        p.pagesDone = pageNo;
+        bool isLast = pageNo == p.pageCount;
+        if (isLast || TimeSinceInMs(lastPost) >= kWordCountProgressMs) {
+            PostWordCountProgress(p);
+            lastPost = TimeGet();
+        }
+    }
+    d->engine->ReleaseTextExtractionThreadContext();
+    d->engine->Release();
+    delete d;
+    AtomicIntDec(&gDangerousThreadCount);
+}
+
+static void OnWordCountNotifClosed(NotificationClosedEvent* ev) {
+    AtomicIntInc(&gWordCountGen);
+    RemoveNotification(ev->wnd);
+}
+
+static Kind kNotifSelectedText = "notifSelectedText";
+constexpr int kSelectedTextMaxChars = 1000;
+
+// CmdShowSelectedText (#6496): the selection's text exactly as the document
+// has it, to check its text layer without pasting it somewhere
+void ShowSelectedText(MainWindow* win) {
+    WindowTab* tab = win->CurrentTab();
+    bool isTextOnly = false;
+    TempStr text = GetSelectedTextTemp(tab, StrL("\n"), isTextOnly);
+    if (len(text) == 0) {
+        return;
+    }
+    int nChars = Utf8CodepointCount(text);
+    if (nChars > kSelectedTextMaxChars) {
+        Str start = Utf8SliceByCodepoints(text, 0, kSelectedTextMaxChars);
+        TempStr note =
+            fmt(Tr("(the first %d of %d characters; Copy gets all of them)").s, kSelectedTextMaxChars, nChars);
+        text = fmt("%s\xE2\x80\xA6\n\n%s", start, note);
+    }
+    RemoveNotificationsForGroup(win, kNotifSelectedText);
+    NotificationCreateArgs args;
+    args.win = win;
+    args.tab = tab;
+    args.groupId = kNotifSelectedText;
+    args.timeoutMs = kNotifNoTimeout;
+    // the document's text: shown verbatim, never parsed as markup
+    args.plainText = true;
+    args.msg = text;
+    ShowNotification(args);
+}
+
+TempStr SelectedTextNotifMsgTemp(MainWindow* win) {
+    NotificationWnd* wnd = GetNotificationForGroup(win, kNotifSelectedText);
+    return wnd ? NotificationGetMessageTemp(wnd) : TempStr{};
+}
+
+// the word count notification's text, for tests
+TempStr WordCountNotifMsgTemp(MainWindow* win) {
+    NotificationWnd* wnd = GetNotificationForGroup(win, kNotifWordCount);
+    return wnd ? NotificationGetMessageTemp(wnd) : TempStr{};
+}
+
+// CmdCountWords (#6489): counts the text selection or, without one, the whole
+// document on a thread, showing progress in the notification
+void CountWordsInDoc(MainWindow* win) {
+    DisplayModel* dm = win->AsFixed();
+    WindowTab* tab = win->CurrentTab();
+    if (!dm || !tab) {
+        return;
+    }
+    RemoveNotificationsForGroup(win, kNotifWordCount);
+
+    NotificationCreateArgs args;
+    args.win = win;
+    args.tab = tab;
+    args.groupId = kNotifWordCount;
+
+    bool isTextOnly = false;
+    TempStr selText = GetSelectedTextTemp(tab, StrL("\n"), isTextOnly);
+    if (len(selText) > 0) {
+        WordCount wc;
+        CountWords(selText, wc);
+        args.timeoutMs = kWordCountResultTimeoutMs;
+        args.msg = fmt("%s %s", Tr("Selection:"), WordCountMsgTemp(wc));
+        ShowNotification(args);
+        return;
+    }
+
+    EngineBase* engine = dm->GetEngine();
+    auto d = new WordCountThreadData();
+    d->engine = engine;
+    d->progress.win = win;
+    d->progress.tab = tab;
+    d->progress.gen = AtomicIntInc(&gWordCountGen);
+    d->progress.pageCount = engine->PageCount();
+
+    args.msg = Tr("Counting words...");
+    args.onClosed = MkFunc1Void(OnWordCountNotifClosed);
+    ShowNotification(args);
+
+    engine->AddRef();
+    AtomicIntInc(&gDangerousThreadCount);
+    auto fn = MkFunc0<WordCountThreadData>(WordCountThread, d);
+    ThreadHandle thread = StartThread(fn, StrL("WordCount"));
+    if (thread) {
+        SafeCloseThreadHandle(&thread);
+        return;
+    }
+    AtomicIntDec(&gDangerousThreadCount);
+    engine->Release();
+    delete d;
+    RemoveNotificationsForGroup(win, kNotifWordCount);
+}
+
+// CmdToggleMirror (#6221)
+void ToggleMirror(MainWindow* win) {
+    DisplayModel* dm = win->AsFixed();
+    if (!dm) {
+        return;
+    }
+    dm->SetMirror(!dm->GetMirror());
+    win->RedrawAll(true);
 }
 
 // ComicBookUI.AutoRotateWidePages, see DisplayModel::PageRotation
@@ -1299,10 +1752,20 @@ bool WindowHasDocumentLoading(MainWindow* win) {
     return false;
 }
 
-// an image next to the document with the same base name (Calibre puts a
+// ebook and comic formats, where a same-named image is a cover; next to a PDF
+// it's often unrelated (a plot exported as "a.pdf" and "a.png", #6414)
+static bool HasSiblingCover(FileType ft) {
+    return ft == FileType::Epub || ft == FileType::Mobi || ft == FileType::Fb2 || ft == FileType::Fb2z ||
+           ft == FileType::PalmDoc || ft == FileType::Lit || IsEngineCbxSupportedFileType(ft);
+}
+
+// an image next to an ebook with the same base name (Calibre puts a
 // "Title.jpg" cover next to "Title.epub") beats page 1 as the thumbnail
 TempStr FindCoverImageTemp(Str docPath) {
     static const char* kCoverExts[] = {".jpg", ".jpeg", ".png"};
+    if (!HasSiblingCover(GuessFileTypeFromName(docPath, true))) {
+        return {};
+    }
     TempStr noExt = path::GetPathNoExtTemp(docPath);
     for (const char* ext : kCoverExts) {
         TempStr cover = str::JoinTemp(noExt, Str(ext));
@@ -1318,6 +1781,11 @@ TempStr FindCoverImageTemp(Str docPath) {
 
 void TogglePageInfoHelper(MainWindow* win) {
     if (!win) {
+        return;
+    }
+    if (GetPageInfoBarMode() != PageInfoBarMode::Notification) {
+        win->pageInfoWanted = !win->pageInfoWanted;
+        PageInfoBarChanged(win);
         return;
     }
     if (win->pageInfoWanted) {
@@ -1497,6 +1965,63 @@ void ZoomToSelection(MainWindow* win) {
     }
 }
 
+// Show on every page only the part the selection covers on its first page,
+// e.g. to cut the fixed margins off a scanned book (issue #3585).
+void TrimPagesToSelection(MainWindow* win) {
+    DisplayModel* dm = win->AsFixed();
+    WindowTab* tab = win->CurrentTab();
+    if (!dm || !tab || !win->showSelection || !tab->selectionOnPage || len(*tab->selectionOnPage) == 0) {
+        return;
+    }
+
+    int pageNo = (*tab->selectionOnPage)[0].pageNo;
+    RectF rect;
+    for (SelectionOnPage& sel : *tab->selectionOnPage) {
+        if (sel.pageNo == pageNo) {
+            rect = rect.Union(sel.rect);
+        }
+    }
+    if (rect.IsEmpty()) {
+        return;
+    }
+
+    DeleteOldSelectionInfo(win, true);
+    dm->TrimPagesToRect(pageNo, rect);
+    dm->GoToPage(pageNo, false);
+}
+
+// Read Columns reads one page at a time or pages shown continuously; two pages
+// side by side switch to continuous
+void ToggleReadColumns(MainWindow* win) {
+    DisplayModel* dm = win->AsFixed();
+    if (!dm) {
+        return;
+    }
+    bool enable = !dm->GetReadColumns();
+    dm->SetReadColumns(enable);
+    if (!enable) {
+        return;
+    }
+    DisplayMode mode = dm->GetDisplayMode();
+    if (mode != DisplayMode::Continuous && mode != DisplayMode::SinglePage) {
+        SwitchToDisplayMode(win, DisplayMode::Continuous, false);
+    }
+    dm = win->AsFixed();
+    if (dm) {
+        dm->FitColumnToWindow();
+    }
+}
+
+void ShowWholePages(MainWindow* win) {
+    DisplayModel* dm = win->AsFixed();
+    if (!dm) {
+        return;
+    }
+    ScrollState state = dm->GetScrollState();
+    dm->SetUserCrop({});
+    dm->SetScrollState(state);
+}
+
 // what CmdToggleCursorPosition would switch to. The tip cycles pt -> mm -> in
 // and then closes, so the command palette can't say true / false; naming the
 // next unit here keeps it in step with ToggleCursorPositionInDoc() below
@@ -1609,8 +2134,7 @@ bool gNextPrevDirReady = false;
 bool gNextPrevDirScanning = false;
 
 void ScheduleReloadTab(WindowTab* tab) {
-    auto fn = MkFunc0<WindowTab>(ReloadTab, tab);
-    uitask::Post(fn, "ReloadTab");
+    PostForTab(tab, ReloadTab, "ReloadTab");
 }
 
 // Called from the AUTO_RELOAD_TIMER tick. Returns true if the file changed
@@ -1824,9 +2348,9 @@ bool TextSelectExtendFromVk(int key, TextSelectUnit& unit, int& delta) {
 }
 
 void ToggleFullScreen(MainWindow* win, bool presentation) {
-    bool enterFullScreen = presentation ? !win->InPresentation() : !win->isFullScreen;
+    bool enterFullScreen = presentation ? !win->InPresentation() : !win->IsFullScreen();
 
-    if (win->InPresentation() || win->isFullScreen) {
+    if (win->IsFullScreenOrPresentation()) {
         ExitFullScreen(win);
     } else {
         RememberDefaultWindowPosition(win);
@@ -1852,19 +2376,68 @@ void NotifyUrlSelectionTruncated(WindowTab* tab) {
     ShowNotification(args);
 }
 
+// Reopens the last closed tab, or all the tabs of the last closed window in
+// their order, in a window of their own unless this one has no documents.
 void ReopenLastClosedFile(MainWindow* win) {
-    Str path = PopRecentlyClosedDocument();
-    if (len(path) == 0) {
+    ClosedDocuments* closed = PopRecentlyClosed();
+    if (!closed) {
         return;
     }
-    logf("ReopenLastClosedFile: '%s'\n", path);
-    LoadDocument(win, path);
+    defer {
+        delete closed;
+    };
+    if (!closed->isWindow) {
+        logf("ReopenLastClosedFile: '%s'\n", closed->paths[0]);
+        LoadDocument(win, closed->paths[0]);
+        return;
+    }
+
+    int n = len(closed->paths);
+    logf("ReopenLastClosedFile: window with %d documents\n", n);
+    MainWindow* target = win;
+    if (!OS_WASM && HasOpenedDocuments(win)) {
+        target = CreateAndShowMainWindow(nullptr);
+    }
+    if (!target) {
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        LoadDocument(target, closed->paths[i]);
+    }
+    if (!IsMainWindowValid(target)) {
+        return;
+    }
+    // by path: the window can have a Home tab before the documents
+    Str activePath = closed->paths[closed->activeIdx];
+    for (WindowTab* tab : target->Tabs()) {
+        if (str::Eq(tab->filePath, activePath)) {
+            TabsSelect(target, target->GetTabIdx(tab));
+            break;
+        }
+    }
+}
+
+// Remembers a window's documents, in tab order, for Reopen Last Closed.
+void RememberClosedWindow(MainWindow* win) {
+    StrVec paths;
+    int activeIdx = 0;
+    WindowTab* current = win->CurrentTab();
+    for (WindowTab* tab : win->Tabs()) {
+        if (tab->IsNonDocumentTab() || len(tab->filePath) == 0) {
+            continue;
+        }
+        if (tab == current) {
+            activeIdx = len(paths);
+        }
+        paths.Append(tab->filePath);
+    }
+    RememberRecentlyClosedWindow(paths, activeIdx);
 }
 
 // Enter the requested mode even when the window is in the other fullscreen
 // mode, as command-line and DDE requests require.
 void SwitchToFullScreen(MainWindow* win, bool presentation) {
-    if (presentation ? win->isFullScreen : win->InPresentation()) {
+    if (presentation ? win->IsFullScreen() : win->InPresentation()) {
         ExitFullScreen(win);
     }
     EnterFullScreen(win, presentation);
@@ -1967,7 +2540,7 @@ bool OpenFileExternally(Str path) {
 }
 
 void CreateThumbnailForFile(MainWindow* win, FileState* ds) {
-    if (!ds || !ShouldSaveThumbnail(ds)) {
+    if (!ds || !ShouldSaveThumbnail(ds) || IsBrowserCapturedThumbnail(ds->filePath)) {
         return;
     }
 
@@ -1990,20 +2563,18 @@ void CreateThumbnailForFile(MainWindow* win, FileState* ds) {
         }
     }
 
-    // re-opening a PostScript or DVI file converts it again (seconds for a big
-    // one), so hand the thread a clone of the engine we already have
-    EngineBase* clone = nullptr;
+    // render page 1 of the engine we already have rather than open the file
+    // again: a PostScript or DVI conversion, an ebook layout or an archive
+    // extraction, done twice. Engines render from several threads anyway. The
+    // ref keeps it alive for the thread even if the tab closes first.
+    EngineBase* shared = nullptr;
     DisplayModel* dm = win->IsDocLoaded() ? win->AsFixed() : nullptr;
     EngineBase* engine = dm ? dm->GetEngine() : nullptr;
-    if (engine && (engine->kind == kindEnginePostScript || engine->kind == kindEngineDvi) &&
-        str::Eq(engine->FilePath(), ds->filePath)) {
-        clone = engine->Clone();
+    if (engine && str::Eq(engine->FilePath(), ds->filePath)) {
+        engine->AddRef();
+        shared = engine;
     }
-
-    // otherwise use file-based async thumbnail creation; it's independent
-    // of the tab lifecycle so it works even if the tab is closed before
-    // the render completes
-    CreateThumbnailFromFileAsync(ds, clone);
+    CreateThumbnailFromFileAsync(ds, shared);
 }
 
 void DeleteCurrentFileAndOpenNext(MainWindow* win) {
@@ -2021,7 +2592,7 @@ void DeleteCurrentFileAndOpenNext(MainWindow* win) {
 }
 
 void OnMenuViewShowHideToolbar(MainWindow* win) {
-    if (win->isFullScreen) {
+    if (win->IsFullScreen()) {
         int mode = FullscreenToolbarModeFromPrefs();
         int next = kToolbarShow;
         if (mode == kToolbarShow) {
@@ -2220,11 +2791,11 @@ Annotation* MakeAnnotationsFromSelection(WindowTab* tab, AnnotCreateArgs* args) 
     if (!ok) {
         return nullptr;
     }
-    // highlight / underline / squiggly / strike out mark up runs of *text*. A
-    // rectangular selection (Ctrl+drag, Select All) isn't one - marking up its
-    // bounding boxes produced bars over whitespace - so do nothing.
+    // underline / squiggly / strike out mark up runs of *text*. Highlight can also
+    // fill a Ctrl+drag area (#6467), but not Select All's whole pages.
     bool isTextSelection = dm->textSelection && dm->textSelection->result.len > 0;
-    if (!isTextSelection) {
+    bool isHighlightArea = args->annotType == AnnotationType::Highlight && IsDrawnRectSelection(win);
+    if (!isTextSelection && !isHighlightArea) {
         return nullptr;
     }
 
@@ -2468,8 +3039,9 @@ void OpenUsingDDE(HWND targetHwnd, Str path, Flags& i, bool isFirstWin) {
         cmd.Append(fmt("[ForwardSearch(\"%s\", \"%s\", %d, 0, 0, 1)]", fullPath, srcPath, i.forwardSearchLine));
     }
     if (i.search) {
-        // TODO: quote if i.search has '"' in it
-        cmd.Append(fmt("[Search(\"%s\",\"%s\")]", fullPath, i.search));
+        // HandleSearchCmd unescapes "" to "
+        TempStr term = str::ReplaceTemp(i.search, StrL("\""), StrL("\"\""));
+        cmd.Append(fmt("[Search(\"%s\",\"%s\")]", fullPath, term));
     }
     if ((i.enterPresentation || i.enterFullScreen) && isFirstWin) {
         Str name = i.enterPresentation ? StrL("Presentation") : StrL("FullScreen");
@@ -2571,15 +3143,37 @@ void OnFrameKeyB(MainWindow* win, bool isShift) {
         } else if (!forward && currPage <= ctrl->CurrentPageNo()) {
             win->ctrl->GoToPrevPage();
         }
-    } else if (win->presentation) {
-        win->ChangePresentationMode(PM_BLACK_SCREEN);
+    } else if (win->InPresentation()) {
+        win->ChangePresentationMode(WindowMode::PresentationBlack);
     }
 }
 
-// the cover, or else the first page, of d->filePath as the home page shows it:
-// ThumbnailsType legacy is the top of the page as wide as the frame, full the
-// whole page scaled to fit the frame. Releases d->engine
+// page 1 as the home page shows it: ThumbnailsType legacy is the top of the
+// page as wide as the frame, full the whole page scaled to fit the frame
+static Pixmap* RenderEngineThumbnail(EngineBase* engine) {
+    RectF pageRect = engine->PageMediabox(1);
+    if (pageRect.IsEmpty()) {
+        return nullptr;
+    }
+    pageRect = engine->Transform(pageRect, 1, 1.0f, 0);
+    Size frame = ThumbnailFrameSize();
+    float zoom = (float)frame.dx / pageRect.dx;
+    if (ThumbnailsAreFullPage()) {
+        zoom = std::min(zoom, (float)frame.dy / pageRect.dy);
+    } else {
+        pageRect.dy = std::min(pageRect.dy, (float)frame.dy / zoom);
+    }
+    pageRect = engine->Transform(pageRect, 1, 1.0f, 0, true);
+    RenderPageArgs args(1, zoom, 0, &pageRect);
+    return engine->RenderPage(args);
+}
+
+// the cover, or else the first page, of d->filePath. Releases d->engine
 static Pixmap* RenderFileThumbnail(CreateThumbnailFromFileData* d) {
+    if (IsBrowserCapturedThumbnail(d->filePath)) {
+        SafeEngineRelease(&d->engine);
+        return nullptr;
+    }
     EngineBase* engine = d->engine;
     TempStr cover = FindCoverImageTemp(d->filePath);
     if (len(cover) > 0) {
@@ -2602,29 +3196,57 @@ static Pixmap* RenderFileThumbnail(CreateThumbnailFromFileData* d) {
     if (!engine) {
         return nullptr;
     }
-    Pixmap* bmp = nullptr;
-    RectF pageRect = engine->PageMediabox(1);
-    if (!pageRect.IsEmpty()) {
-        pageRect = engine->Transform(pageRect, 1, 1.0f, 0);
-        Size frame = ThumbnailFrameSize();
-        float zoom = (float)frame.dx / pageRect.dx;
-        if (ThumbnailsAreFullPage()) {
-            zoom = std::min(zoom, (float)frame.dy / pageRect.dy);
-        } else {
-            pageRect.dy = std::min(pageRect.dy, (float)frame.dy / zoom);
-        }
-        pageRect = engine->Transform(pageRect, 1, 1.0f, 0, true);
-        RenderPageArgs args(1, zoom, 0, &pageRect);
-        bmp = engine->RenderPage(args);
-    }
+    Pixmap* bmp = RenderEngineThumbnail(engine);
     engine->Release();
     d->engine = nullptr;
     return bmp;
 }
 
+// imageData is a picture of the document (a png, ...), e.g. a screenshot of the browser view
+void SetThumbnailFromImage(Str filePath, Str imageData) {
+    FileState* fs = FileHistoryFindByPath(filePath);
+    if (!fs || !ShouldSaveThumbnail(fs) || len(imageData) == 0) {
+        return;
+    }
+    EngineBase* engine = CreateEngineImageFromData(imageData);
+    if (!engine) {
+        return;
+    }
+    Pixmap* bmp = RenderEngineThumbnail(engine);
+    engine->Release();
+    SetThumbnail(fs, bmp);
+}
+
+// thumbnail threads read gSettings and file history, so a settings reload
+// waits for them like for load threads; only touched on the UI thread
+static int gThumbnailThreadsActive = 0;
+
+bool AreThumbnailThreadsActive() {
+    return gThumbnailThreadsActive > 0;
+}
+
+static void ThumbnailThreadStarted() {
+    gThumbnailThreadsActive++;
+}
+
+static void ThumbnailThreadFinished() {
+    gThumbnailThreadsActive--;
+    ReportIf(gThumbnailThreadsActive < 0);
+#if !defined(SUMATRA_NG)
+    if (gThumbnailThreadsActive == 0) {
+        uitask::Post(MkFunc0Void(ReloadDeferredSettings), "ReloadDeferredSettings");
+    }
+#endif
+}
+
+static void CreateThumbnailFromFileDone(CreateThumbnailFromFileData* d) {
+    CreateThumbnailFromFileFinish(d);
+    ThumbnailThreadFinished();
+}
+
 static void CreateThumbnailFromFileThread(CreateThumbnailFromFileData* d) {
     d->bmp = RenderFileThumbnail(d);
-    auto fn = MkFunc0<CreateThumbnailFromFileData>(CreateThumbnailFromFileFinish, d);
+    auto fn = MkFunc0<CreateThumbnailFromFileData>(CreateThumbnailFromFileDone, d);
     uitask::Post(fn, "SetThumbnailFromFile");
     DestroyTempArena();
 }
@@ -2637,24 +3259,8 @@ void CreateThumbnailFromFileAsync(FileState* ds, EngineBase* engine) {
     d->engine = engine;
     d->fileEBookUI = CopyFileEBookUI(ds->eBookUI);
     auto fn = MkFunc0<CreateThumbnailFromFileData>(CreateThumbnailFromFileThread, d);
+    ThumbnailThreadStarted();
     RunAsync(fn, StrL("CreateThumbnailFromFile"));
-}
-
-// the history entries whose files still exist, in the order the home page shows them
-static void CollectThumbnailFiles(Vec<FileState*>& list) {
-    Vec<FileState*> all;
-    if (gSettings->homePageSortByFrequentlyRead) {
-        FileHistoryGetFrequencyOrder(all);
-    } else {
-        FileHistoryGetRecentlyOpenedOrder(all);
-    }
-    for (FileState* fs : all) {
-        Str path = fs->filePath;
-        if (len(path) == 0 || path::IsCloudPlaceholder(path) || !DocumentPathExists(path)) {
-            continue;
-        }
-        VecAppend(list, fs);
-    }
 }
 
 static CreateThumbnailFromFileData* NewThumbnailData(FileState* fs) {
@@ -2664,9 +3270,80 @@ static CreateThumbnailFromFileData* NewThumbnailData(FileState* fs) {
     return d;
 }
 
+enum class ThumbnailsToMake {
+    All,
+    Missing,
+};
+
 struct RegenerateThumbnailsData {
     Vec<CreateThumbnailFromFileData*> files;
+    ThumbnailsToMake which = ThumbnailsToMake::All;
+    int gen = 0;
 };
+
+// bumped by each regenerate batch: an older one still running stops, and its
+// thumbnails (maybe of the previous ThumbnailsType) are dropped
+static AtomicInt gThumbnailBatchGen = 0;
+
+static bool IsThumbnailBatchStale(int gen) {
+    return gen != 0 && gen != AtomicIntGet(&gThumbnailBatchGen);
+}
+
+// The history entries, in the order the home page shows them. Only copies: the
+// thumbnail thread finds out which files still exist, because checking a file on
+// a network share that's away waits out a network timeout (#6474)
+static RegenerateThumbnailsData* NewRegenerateThumbnailsData(ThumbnailsToMake which) {
+    Vec<FileState*> all;
+    if (gSettings->homePageSortByFrequentlyRead) {
+        FileHistoryGetFrequencyOrder(all);
+    } else {
+        FileHistoryGetRecentlyOpenedOrder(all);
+    }
+    auto* data = new RegenerateThumbnailsData();
+    data->which = which;
+    for (FileState* fs : all) {
+        if (len(fs->filePath) == 0) {
+            continue;
+        }
+        // an open document's load makes its own thumbnail (CreateThumbnailForFile)
+        bool openElsewhere = which == ThumbnailsToMake::Missing && gSettings->showStartPage &&
+                             FindMainWindowByFile(fs->filePath, false) != nullptr;
+        if (openElsewhere) {
+            continue;
+        }
+        VecAppend(data->files, NewThumbnailData(fs));
+    }
+    return data;
+}
+
+// whether it's in our thumbnail cache, a local folder: cheap to check up front
+static bool HasCachedThumbnail(Str path) {
+    TempStr thumbPath = GetThumbnailPathTemp(path);
+    return len(thumbPath) == 0 || file::Exists(thumbPath);
+}
+
+// can be slow: a drive that's away (unplugged, offline share) waits out a timeout
+// once, then is known to be away, so the files after it aren't held up
+static bool DocumentIsThere(Str path) {
+    return path::IsOnAvailableDrive(path) && !path::IsCloudPlaceholder(path) && DocumentPathExists(path);
+}
+
+// on the thumbnail thread: drop the files whose thumbnails are cached
+static void DropCachedThumbnailFiles(RegenerateThumbnailsData* data) {
+    if (data->which != ThumbnailsToMake::Missing) {
+        return;
+    }
+    Vec<CreateThumbnailFromFileData*> missing;
+    for (CreateThumbnailFromFileData* d : data->files) {
+        if (HasCachedThumbnail(d->filePath)) {
+            delete d;
+        } else {
+            VecAppend(missing, d);
+        }
+    }
+    data->files = missing;
+    ResetTempArena();
+}
 
 struct ThumbnailProgress {
     Str name;
@@ -2684,6 +3361,7 @@ static void ShowThumbnailProgress(ThumbnailProgress* p) {
         NotificationCreateArgs args;
         args.win = win;
         args.groupId = kNotifThumbnailProgress;
+        args.corner = NotifCorner::BottomLeft;
         args.plainText = true;
         args.msg = msg;
         ShowNotification(args);
@@ -2698,15 +3376,28 @@ static void HideThumbnailProgress() {
     }
 }
 
+static void RegenerateThumbnailsDone() {
+    HideThumbnailProgress();
+    ThumbnailThreadFinished();
+}
+
 // renders one file at a time; each finished thumbnail is set and shown on
 // the UI thread before the next file starts
 static void RegenerateThumbnailsThread(RegenerateThumbnailsData* data) {
+    DropCachedThumbnailFiles(data);
+    logf("RegenerateThumbnailsThread: %d files\n", len(data->files));
     int total = len(data->files);
     int done = 0;
     for (CreateThumbnailFromFileData* d : data->files) {
+        done++;
+        if (IsThumbnailBatchStale(data->gen) || !DocumentIsThere(d->filePath)) {
+            delete d;
+            ResetTempArena();
+            continue;
+        }
         auto* p = new ThumbnailProgress();
         p->name = str::Dup(path::GetBaseNameTemp(d->filePath));
-        p->done = ++done;
+        p->done = done;
         p->total = total;
         uitask::Post(MkFunc0<ThumbnailProgress>(ShowThumbnailProgress, p), "ThumbnailProgress");
         d->bmp = RenderFileThumbnail(d);
@@ -2714,9 +3405,20 @@ static void RegenerateThumbnailsThread(RegenerateThumbnailsData* data) {
         uitask::Post(fn, "SetThumbnailFromFile");
         ResetTempArena();
     }
-    uitask::Post(MkFunc0Void(HideThumbnailProgress), "ThumbnailProgressDone");
+    uitask::Post(MkFunc0Void(RegenerateThumbnailsDone), "ThumbnailProgressDone");
     delete data;
     DestroyTempArena();
+}
+
+// a batch started here supersedes the one still running
+static void StartRegenerateThumbnails(RegenerateThumbnailsData* data) {
+    data->gen = AtomicIntInc(&gThumbnailBatchGen);
+    for (CreateThumbnailFromFileData* d : data->files) {
+        d->batchGen = data->gen;
+    }
+    auto fn = MkFunc0<RegenerateThumbnailsData>(RegenerateThumbnailsThread, data);
+    ThumbnailThreadStarted();
+    RunAsync(fn, StrL("RegenerateThumbnails"));
 }
 
 // the cached thumbnails were made for the other ThumbnailsType: drop them and
@@ -2737,14 +3439,7 @@ void OnThumbnailsTypeChanged() {
         return;
     }
 
-    Vec<FileState*> list;
-    CollectThumbnailFiles(list);
-    auto* data = new RegenerateThumbnailsData();
-    for (FileState* fs : list) {
-        VecAppend(data->files, NewThumbnailData(fs));
-    }
-    auto fn = MkFunc0<RegenerateThumbnailsData>(RegenerateThumbnailsThread, data);
-    RunAsync(fn, StrL("RegenerateThumbnails"));
+    StartRegenerateThumbnails(NewRegenerateThumbnailsData(ThumbnailsToMake::All));
 }
 
 // Home-page files that still exist but have no cached thumbnail.
@@ -2757,23 +3452,12 @@ void RegenerateMissingThumbnails() {
     // StartThread runs inline, so a batch of renders would freeze startup
     return;
 #endif
-    Vec<FileState*> list;
-    CollectThumbnailFiles(list);
-    auto* data = new RegenerateThumbnailsData();
-    for (FileState* fs : list) {
-        TempStr thumbPath = GetThumbnailPathTemp(fs->filePath);
-        if (len(thumbPath) == 0 || file::Exists(thumbPath)) {
-            continue;
-        }
-        VecAppend(data->files, NewThumbnailData(fs));
-    }
+    auto* data = NewRegenerateThumbnailsData(ThumbnailsToMake::Missing);
     if (len(data->files) == 0) {
         delete data;
         return;
     }
-    logf("RegenerateMissingThumbnails: %d\n", len(data->files));
-    auto fn = MkFunc0<RegenerateThumbnailsData>(RegenerateThumbnailsThread, data);
-    RunAsync(fn, StrL("RegenerateThumbnails"));
+    StartRegenerateThumbnails(data);
 }
 
 int SidebarExtraDx(MainWindow* win) {
@@ -2812,4 +3496,41 @@ void ToggleCaption(CustomCommand* cmd) {
     if (show != gSettings->showCaption) {
         ToggleSettingsBool(&gSettings->showCaption);
     }
+}
+
+void ToggleSidebarAutoHide(CustomCommand* cmd) {
+    bool on = GetCommandBoolArg(cmd, kCmdArgState, !gSettings->sidebarAutoHide);
+    if (on != gSettings->sidebarAutoHide) {
+        ToggleSettingsBool(&gSettings->sidebarAutoHide);
+    }
+}
+
+void CreateThumbnailFromFileFinish(CreateThumbnailFromFileData* d) {
+    if (d->bmp && !IsThumbnailBatchStale(d->batchGen)) {
+        FileState* fs = FileHistoryFindByPath(d->filePath);
+        SetThumbnail(fs, d->bmp);
+        d->bmp = nullptr;
+        MaybeRedrawHomePage();
+    }
+    delete d;
+}
+
+// Research articles vs slides (issue #4055): portrait -> continuous + fit
+// width, landscape -> single page + fit page. First open only.
+bool ShouldUsePageAspect(Str path) {
+    if (!IsPageAspectDisplayMode(gSettings->defaultDisplayMode)) {
+        return false;
+    }
+    FileType ft = GuessFileTypeFromName(path, true);
+    return ft == FileType::PDF || ft == FileType::Xps || ft == FileType::DjVu || ft == FileType::PS ||
+           ft == FileType::Dvi || ft == FileType::Caj || ft == FileType::Ofd;
+}
+
+void OnTemporaryFileNotifClosed(NotificationClosedEvent* ev) {
+    // closing it means "don't tell me again"
+    if (ev->reason == NotifCloseReason::User) {
+        gSettings->temporaryFileShowNotification = false;
+        ScheduleSaveSettings();
+    }
+    RemoveNotification(ev->wnd);
 }

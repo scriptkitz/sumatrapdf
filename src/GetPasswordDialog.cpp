@@ -103,14 +103,14 @@ void GetPasswordWnd::OnOk(VirtMouseEvent*) {
 bool GetPasswordWnd::Create() {
     Color colTxt = ThemeWindowTextColor();
     Color colBg = ThemeWindowControlBackgroundColor();
-    Color colMuted = ThemeWindowTextDisabledColor();
+    Color colMuted = ThemeWindowDarkerTextColor();
     PlatformFont* fontText = DlgUiFont(kToolDlgTextFontPx);
     PlatformFont* fontQuery = DlgUiFont(kToolDlgQueryFontPx);
     SetFont(fontText);
     bool isRtl = IsUIRtl();
     {
         CreateCustomArgs args;
-        args.parent = hwndParent;
+        args.owner = hwndParent;
         args.title = Tr("Enter password");
         args.visible = false;
         args.style = WS_POPUPWINDOW | WS_CAPTION;

@@ -14,6 +14,7 @@ import { assemblePdf, cmdId, runStandalone, tmpPath } from "./util.ts";
 import { findCanvas, killAndWait, launchControlled } from "./win-automation.ts";
 import {
   captureWindowPixels,
+  ensureModifierKeysUp,
   enumWindows,
   getClassName,
   getWindowPid,
@@ -92,6 +93,13 @@ function findDialog(pid: number): number {
   return found;
 }
 
+// a key press is a key-down and a char: orig's dialog takes the access key from
+// the char, ng's from the key-down
+function pressLetter(hwnd: number, letter: string): void {
+  postMessage(hwnd, WM_KEYDOWN, letter.toUpperCase().charCodeAt(0), 0);
+  postMessage(hwnd, WM_CHAR, letter.charCodeAt(0), 0);
+}
+
 async function waitForDialog(pid: number, timeoutMs = 5000): Promise<number> {
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
@@ -162,11 +170,13 @@ export async function testit(): Promise<void> {
     if (!kbdDlg) {
       throw new Error(`issue-4788: CmdAdjustBrightness did not open the "${DIALOG_TITLE}" dialog`);
     }
-    postMessage(kbdDlg, WM_CHAR, "b".charCodeAt(0), 0);
+    // the slider reads the live key state: a Ctrl stuck down mid-run (RDP) makes an arrow a big step
+    await ensureModifierKeysUp();
+    pressLetter(kbdDlg, "b");
     for (let i = 0; i < 3; i++) {
       postMessage(kbdDlg, WM_KEYDOWN, VK_RIGHT, 0);
     }
-    postMessage(kbdDlg, WM_CHAR, "c".charCodeAt(0), 0);
+    pressLetter(kbdDlg, "c");
     postMessage(kbdDlg, WM_KEYDOWN, VK_END, 0);
     await sleep(300);
     const kbd = await readAdjust(client);

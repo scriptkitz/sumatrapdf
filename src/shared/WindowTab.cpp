@@ -21,9 +21,7 @@
 #include "DisplayModel.h"
 #include "SumatraPDF.h"
 #include "MainWindow.h"
-#if !defined(SUMATRA_NG)
 #include "Selection.h"
-#endif
 #include "ReadAloud.h"
 #include "Translations.h"
 #if !defined(SUMATRA_NG)
@@ -31,17 +29,38 @@
 #include "ReadingBar.h"
 #include "AnnotEditToolbar.h"
 #endif
+#include "AIChatTypes.h"
+#include "AIChatCommon.h"
+#include "HexViewCommon.h"
 #include "WindowTab.h"
 
 WindowTab::WindowTab(MainWindow* win) {
     this->win = win;
 }
 
+// our open-cache copy goes when its last tab does: a moved or duplicated tab
+// shows the same copy (issue #6481)
+static void DeleteOpenCacheCopyOf(WindowTab* self, Str path) {
+    if (!IsOpenCachePath(path)) {
+        return;
+    }
+    for (MainWindow* win : gWindows) {
+        for (WindowTab* tab : win->Tabs()) {
+            if (tab != self && path::IsSame(tab->filePath, path)) {
+                return;
+            }
+        }
+    }
+    DeleteOpenCacheCopy(path);
+}
+
 void WindowTab::SetFilePath(Str path) {
     type = Type::Document;
+    isExtraHome = false;
     bool changed = filePath && !path::IsSame(filePath, path);
-    if (changed && IsOpenCachePath(filePath)) {
-        file::Delete(filePath);
+    if (changed) {
+        DeleteOpenCacheCopyOf(this, filePath);
+        temporaryFileNotified = false;
     }
     if (changed) {
         str::FreePtr(&pendingFindText);
@@ -60,7 +79,9 @@ bool WindowTab::IsAboutTab() const {
 
 #if !defined(SUMATRA_NG)
 // the SidebarView / SidebarBottomView settings
-static const char* kSidebarViewNames[kSidebarViewCount] = {"bookmarks", "thumbnails", "favorites"};
+static const char* kSidebarViewNames[] = {"bookmarks", "thumbnails", "favorites", "signatures", "layers"};
+
+static_assert(dimof(kSidebarViewNames) == kSidebarViewCount);
 
 SidebarView SidebarViewFromStr(Str s, SidebarView def) {
     for (int i = 0; i < kSidebarViewCount; i++) {
@@ -72,23 +93,54 @@ SidebarView SidebarViewFromStr(Str s, SidebarView def) {
 }
 
 Str SidebarViewToStr(SidebarView v) {
+    if (ReportIf((int)v < 0 || (int)v >= kSidebarViewCount)) {
+        return {};
+    }
     return Str(kSidebarViewNames[(int)v]);
 }
 
 #endif
+
+// the first Home tab: compact and fixed in place. IsAboutTab() is any Home tab
+bool WindowTab::IsPinnedHomeTab() const {
+    return IsAboutTab() && !isExtraHome;
+}
 
 bool WindowTab::IsFavoritesTab() const {
     ReportIf(type == WindowTab::Type::None);
     return type == WindowTab::Type::Favorites;
 }
 
-// About or Favorites: no document controller
-bool WindowTab::IsNonDocumentTab() const {
-    return IsAboutTab() || IsFavoritesTab();
+bool WindowTab::IsHexTab() const {
+    return type == WindowTab::Type::HexView;
 }
+
+// About, Favorites or hex view: no document controller
+bool WindowTab::IsNonDocumentTab() const {
+    return IsAboutTab() || IsFavoritesTab() || IsHexTab();
+}
+
+#if !defined(SUMATRA_NG)
+// frees a finished background load that was never attached
+void WindowTab::DropPendingLoad() {
+    if (!pendingLoadArgs) {
+        return;
+    }
+    // LoadArgs dtor releases any leftover engine; drop ctrl first so we do
+    // not double-delete through both paths if both were set
+    delete pendingLoadArgs->ctrl;
+    pendingLoadArgs->ctrl = nullptr;
+    SafeEngineRelease(&pendingLoadArgs->engine);
+    delete pendingLoadArgs;
+    pendingLoadArgs = nullptr;
+}
+#endif
 
 WindowTab::~WindowTab() {
     logf("~WindowTab: 0x%p, dm: 0x%p\n", this, AsFixed());
+#if !defined(SUMATRA_NG)
+    delete signatures;
+#endif
     // Nothing may point at a tab that is going away.
     ReadAloudForgetTab(this);
 #if !defined(SUMATRA_NG)
@@ -126,6 +178,8 @@ WindowTab::~WindowTab() {
     FileWatcherUnsubscribe(watcher);
     watcher = nullptr;
     delete selectionOnPage;
+    HexViewFree(hex);
+    hex = nullptr;
 #if !defined(SUMATRA_NG)
     // technically we only need to clear ctrl == gMostRecentlyOpenedDoc
     // but gMostRecentlyOpenedDoc is only for dde commands
@@ -136,18 +190,9 @@ WindowTab::~WindowTab() {
     DeleteControllerAsync(ctrl);
     ctrl = nullptr;
 #if !defined(SUMATRA_NG)
-    if (pendingLoadArgs) {
-        // LoadArgs dtor releases any leftover engine; drop ctrl first so we do
-        // not double-delete through both paths if both were set
-        delete pendingLoadArgs->ctrl;
-        pendingLoadArgs->ctrl = nullptr;
-        SafeEngineRelease(&pendingLoadArgs->engine);
-    }
-    delete pendingLoadArgs;
+    DropPendingLoad();
 #endif
-    if (IsOpenCachePath(filePath)) {
-        file::Delete(filePath);
-    }
+    DeleteOpenCacheCopyOf(this, filePath);
     str::Free(filePath);
     filePath = {};
     str::Free(displayName);
@@ -165,16 +210,12 @@ WindowTab::~WindowTab() {
         delete readAloudHighlight;
         readAloudHighlight = nullptr;
     }
-#if !defined(SUMATRA_NG)
+    // ng too: a running chat's process outlived its closed tab
     for (AIChatTabState& st : aiChat) {
         str::Free(st.sessionId);
         st.sessionId = {};
-        if (st.process) {
-            TerminateProcess(st.process, 0);
-            CloseHandle(st.process);
-        }
+        AIChatCloseProcess(&st.process, true);
     }
-#endif
 }
 
 bool WindowTab::IsDocLoaded() const {
@@ -221,6 +262,10 @@ Str WindowTab::GetTabTitle() const {
             return Tr("Favorites");
         }
         return StrL("");
+    }
+    if (IsHexTab()) {
+        Str name = gSettings->fullPathInTitle ? filePath : path::GetBaseNameTemp(filePath);
+        return fmt("%s (hex)", name);
     }
     TempStr embeddedFileName = ParseEmbeddedPdfName(filePath).fileName;
     if (embeddedFileName) {

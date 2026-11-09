@@ -10,16 +10,16 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ControlClient, ControlCommand } from "./control";
 import { assemblePdf, runStandalone, tmpPath, USE_NG } from "./util";
-import { clientToScreen, getClientRect, postMessage, sleep } from "./winapi";
+import { clientToScreen, getClientRect, packCoords, postMessage, sendMessage, sleep, WM_MOUSEMOVE } from "./winapi";
 import { findCanvas, killAndWait, launchControlled, ngInput } from "./win-automation";
 
-const WM_MOUSEWHEEL = 0x020a;
-const WM_MOUSEHWHEEL = 0x020e;
-const MK_SHIFT = 0x0004;
-const MK_CONTROL = 0x0008;
-const WHEEL_DELTA = 120;
+export const WM_MOUSEWHEEL = 0x020a;
+export const WM_MOUSEHWHEEL = 0x020e;
+export const MK_SHIFT = 0x0004;
+export const MK_CONTROL = 0x0008;
+export const WHEEL_DELTA = 120;
 
-function makePdf(): string {
+export function makePdf(): string {
   const lines: string[] = [];
   for (let i = 0; i < 60; i++) {
     lines.push(`(Reference entry line ${i + 1}) Tj 0 -12 Td`);
@@ -41,10 +41,11 @@ function makePdf(): string {
   ]);
 }
 
-type Popup = {
+export type Popup = {
   visible: boolean;
   hwnd: number;
   page: number;
+  x: number;
   y: number;
   zoom: number;
   pop: { x: number; y: number } | null;
@@ -56,11 +57,11 @@ function below(q: Popup, p: Popup): boolean {
   return q.page > p.page || (q.page === p.page && q.y > p.y);
 }
 
-async function popupState(client: ControlClient): Promise<Popup> {
+export async function popupState(client: ControlClient): Promise<Popup> {
   const res = await client.request(ControlCommand.TestRefHover, []);
   const raw = String(res[1] ?? "");
   if (/visible=0/.test(raw)) {
-    return { visible: false, hwnd: 0, page: 0, y: 0, zoom: 0, pop: null, scale: 1 };
+    return { visible: false, hwnd: 0, page: 0, x: 0, y: 0, zoom: 0, pop: null, scale: 1 };
   }
   const m = /visible=1(?: hwnd=(-?\d+))? page=(-?\d+) y=(-?\d+) zoom=(\d+)/.exec(raw);
   if (!m) {
@@ -71,6 +72,7 @@ async function popupState(client: ControlClient): Promise<Popup> {
     visible: true,
     hwnd: +(m[1] ?? 0),
     page: +m[2]!,
+    x: +(/ x=(-?\d+)/.exec(raw)?.[1] ?? 0),
     y: +m[3]!,
     zoom: +m[4]!,
     pop: popM ? { x: +popM[1]!, y: +popM[2]! } : null,
@@ -78,7 +80,7 @@ async function popupState(client: ControlClient): Promise<Popup> {
   };
 }
 
-async function waitFor(client: ControlClient, what: string, pred: (p: Popup) => boolean): Promise<Popup> {
+export async function waitFor(client: ControlClient, what: string, pred: (p: Popup) => boolean): Promise<Popup> {
   const deadline = Date.now() + 8000;
   for (;;) {
     const p = await popupState(client);
@@ -95,7 +97,7 @@ async function waitFor(client: ControlClient, what: string, pred: (p: Popup) => 
 // WM_MOUSE[H]WHEEL: wParam = delta (high word) | key flags, lParam = screen point.
 // ng takes TestInput "wheel" at a frame point (px * scale = dips; a horizontal
 // delta is offset by 1000000, mods: 1 Ctrl, 2 Shift).
-async function wheel(
+export async function wheel(
   client: ControlClient,
   hwnd: number,
   msg: number,
@@ -135,9 +137,19 @@ export async function testit(): Promise<void> {
     const x = Math.floor((rc.right - rc.left) / 2);
     const y = Math.floor((rc.bottom - rc.top) / 3);
     const onLink = clientToScreen(canvas, x, y);
+    // a resting cursor off the link: Windows sends its position again (a
+    // window appearing under it) without the mouse moving, which must not
+    // cancel the popup
+    const resting = packCoords(5, 5);
+    if (!USE_NG) {
+      sendMessage(canvas, WM_MOUSEMOVE, 0, resting);
+    }
     const res = await client.request(ControlCommand.TestRefHover, ["show", x, y]);
     if (res[0] !== 0) {
       throw new Error(`issue-6252: could not show the popup: ${res[1]}`);
+    }
+    if (!USE_NG) {
+      sendMessage(canvas, WM_MOUSEMOVE, 0, resting);
     }
     let p = await waitFor(client, "the popup did not open", (p) => p.visible && p.page === 2);
     const link = { x, y, scale: p.scale };

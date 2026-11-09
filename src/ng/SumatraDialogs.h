@@ -102,9 +102,9 @@ struct SavePathArgs {
 // takes ownership of args
 void ShowSavePathDialog(SavePathArgs* args);
 void CloseSavePathDialog();
+void CloseSavePathDialogFor(MainWindow* win);
 bool IsSavePathDialogVisible();
 // -dbg-control's stand-in for picking a name in the dialog ({} is Cancel)
-bool TestFinishSavePathDialog(Str path);
 gpui::El* SavePathDialogBuild(MainWindow* win, gpui::Ctx* cx);
 
 void ShowGoToPageDialog(MainWindow* win);
@@ -113,9 +113,13 @@ bool IsGoToPageDialogVisible();
 gpui::El* GoToPageDialogBuild(MainWindow* win, gpui::Ctx* cx);
 
 void ShowAddFavoriteDialog(MainWindow* win, Str filePath, int pageNo, Str pageLabel, Str name);
+void ShowEditFavoritesDialog(MainWindow* win);
 void CloseAddFavoriteDialog();
 bool IsAddFavoriteDialogVisible();
 gpui::El* AddFavoriteDialogBuild(MainWindow* win, gpui::Ctx* cx);
+void CloseOpenFromUrlDialog();
+bool IsOpenFromUrlDialogVisible();
+gpui::El* OpenFromUrlDialogBuild(MainWindow* win, gpui::Ctx* cx);
 
 // what the user typed in the password dialog; only valid during the callback
 struct PasswordDialogResult {
@@ -129,6 +133,16 @@ void ShowGetPasswordDialog(MainWindow* win, Str fileName, bool canRemember, Func
 void CloseGetPasswordDialog();
 bool IsGetPasswordDialogVisible();
 gpui::El* GetPasswordDialogBuild(MainWindow* win, gpui::Ctx* cx);
+
+struct Caj2pdfDownloadDialogResult {
+    bool download = false;
+    bool dontAskAgain = false;
+};
+
+void ShowCaj2pdfDownloadDialog(MainWindow* win, Func1<Caj2pdfDownloadDialogResult*> onDone);
+void CloseCaj2pdfDownloadDialog();
+bool IsCaj2pdfDownloadDialogVisible();
+gpui::El* Caj2pdfDownloadDialogBuild(MainWindow* win, gpui::Ctx* cx);
 
 void ShowCustomZoomDialog(MainWindow* win);
 bool CustomZoomMoveSelection(int dir);
@@ -312,11 +326,6 @@ struct Print_Advanced_Data {
           extraRotation(extraRotation) {}
 };
 
-#if OS_WIN
-// dlgTemplate owns the in-memory DLGTEMPLATE and must outlive the property
-// sheet, as orig's RTL template does
-HPROPSHEETPAGE CreatePrintAdvancedPropSheet(Print_Advanced_Data* data, ScopedMem<DLGTEMPLATE>& dlgTemplate);
-#endif
 void ShowPDFScriptDialog(MainWindow* win);
 void ClosePDFScriptDialog();
 bool IsPDFScriptDialogVisible();

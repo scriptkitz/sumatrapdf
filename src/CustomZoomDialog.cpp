@@ -190,19 +190,7 @@ void CustomZoomWnd::OnKeyDown(KeyEvent* ev) {
 // it. Empty or unreadable leaves the zoom alone.
 float CustomZoomWnd::SelectedZoom() {
     TempStr text = editZoom ? editZoom->GetTextTemp() : Str{};
-    for (int i = 0; i < len(zoomLevels); i++) {
-        if (str::EqI(text, ZoomLevelStrExact(zoomLevels[i]))) {
-            return zoomLevels[i];
-        }
-    }
-    if (len(text) == 0) {
-        return startZoom;
-    }
-    float zoom = (float)atof(CStrTemp(text));
-    if (zoom == 0) {
-        return startZoom;
-    }
-    return limitValue(zoom, kZoomMin, kZoomMax);
+    return ParseZoomText(text, zoomLevels, startZoom);
 }
 
 void CustomZoomWnd::OnCancel(VirtMouseEvent*) {
@@ -237,7 +225,7 @@ bool CustomZoomWnd::Create(MainWindow* mainWin) {
 
     colTxt = ThemeWindowTextColor();
     colBg = ThemeWindowControlBackgroundColor();
-    Color colMuted = ThemeWindowTextDisabledColor();
+    Color colMuted = ThemeWindowDarkerTextColor();
     fontText = DlgUiFont(kToolDlgTextFontPx);
     SetFont(fontText);
     bool isRtl = IsUIRtl();

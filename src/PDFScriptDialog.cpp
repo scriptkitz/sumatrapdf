@@ -18,6 +18,7 @@
 #include "DocController.h"
 #include "EngineBase.h"
 #include "MainWindow.h"
+#include "AIChatTypes.h"
 #include "WindowTab.h"
 #include "SumatraConfig.h"
 #include "SumatraPDF.h"
@@ -175,8 +176,6 @@ Edit* PDFScriptWnd::NewEdit(Str text, PlatformFont* font, Color col, bool isMult
     args.isRtl = IsUIRtl();
     args.isMultiLine = isMultiLine;
     args.noWrap = isMultiLine;
-    // deliberately not noScrollBars: the source can be hundreds of lines and
-    // without a bar there was no way to see past the visible part
     auto* e = new Edit();
     e->SetColors(col, colBg);
     e->Create(args);
@@ -439,7 +438,7 @@ void PDFScriptWnd::Create(MainWindow* owner, Str path) {
     input = str::Dup(path);
     colTxt = ThemeWindowTextColor();
     colBg = ThemeWindowControlBackgroundColor();
-    colMuted = ThemeWindowTextDisabledColor();
+    colMuted = ThemeWindowDarkerTextColor();
     fontText = DlgUiFont(kToolDlgTextFontPx);
     fontMeta = DlgUiFont(kToolDlgMetaFontPx);
     fontCode = GetUserGuiFont(StrL("Consolas"), DpiScale(kScriptCodeFontPx));

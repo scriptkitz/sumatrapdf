@@ -33,6 +33,7 @@
 #include "MainWindow.h"
 #include "ReadingBar.h"
 #include "ReadingAutoScroll.h"
+#include "AIChatTypes.h"
 #include "WindowTab.h"
 #include "Notifications.h"
 #include "Translations.h"
@@ -44,10 +45,15 @@
 #include "SumatraDialogs.h"
 #include "gui/AppShell.h"
 #include "gui/TabsUI.h"
+#include "gui/DocCanvas.h"
+#include "AnnotPlacement.h"
+#include "LinkFollow.h"
+#include "SelectTextKeyboard.h"
 
 #include "SessionState.h"
 #include "AIChatCommon.h"
 #include "AIChatPanel.h"
+#include "HomePage.h"
 #include "Tabs.h"
 #include "MenuDefs.h"
 #include "TabsCommon.h"
@@ -70,20 +76,21 @@ bool TabIsDirty(WindowTab* tab) {
 }
 
 // Hide a lone Home tab. Favorites is a closable tab, so it must remain visible
-// even when it is the only tab left.
+// even when it is the only tab left. On wasm Home has no toolbar, so the strip
+// stays for its menu button.
 bool TabsAreVisible(MainWindow* win) {
     if (win->isQuickLook || (win->tabsInTitlebar && !gSettings->showCaption && !win->captionOverlayShown)) {
         return false;
     }
     // orig's showTabsBar: fullscreen and presentation hide the strip
-    if (win->isFullScreen || win->InPresentation()) {
+    if (win->IsFullScreenOrPresentation()) {
         return false;
     }
     int nTabs = win->TabCount();
     if (nTabs == 0) {
         return false;
     }
-    bool onlyHomeTab = nTabs == 1 && win->GetTab(0)->IsAboutTab();
+    bool onlyHomeTab = !OS_WASM && nTabs == 1 && win->GetTab(0)->IsAboutTab();
     bool showSingleTab = SettingsUseTabs();
     return !onlyHomeTab && ((nTabs > 1) || (showSingleTab && (nTabs > 0)));
 }
@@ -96,9 +103,9 @@ static NO_INLINE void VerifyWindowTab(MainWindow* win, WindowTab* tdata) {
         return;
     }
     bool expectedTocVisibility = tdata->showToc; // if not in presentation mode
-    if (PM_DISABLED != win->presentation) {
-        expectedTocVisibility = false; // PM_BLACK_SCREEN, PM_WHITE_SCREEN
-        if (PM_ENABLED == win->presentation) {
+    if (win->InPresentation()) {
+        expectedTocVisibility = false; // WindowMode::PresentationBlack, WindowMode::PresentationWhite
+        if (win->windowMode == WindowMode::Presentation) {
             expectedTocVisibility = tdata->showTocPresentation;
         }
     }
@@ -147,8 +154,31 @@ void LoadModelIntoTab(WindowTab* tab) {
         return;
     }
     MainWindow* win = tab->win;
+    // as orig: the modes hold page positions of the outgoing document; end them
+    // while win->ctrl is still that document
+    if (win->currentTabTemp && win->currentTabTemp != tab) {
+        StopKeyboardLinkFollowing(win);
+        StopSelectTextWithKeyboard(win);
+        CancelAnnotationPlacement(win);
+        if (win->mouseAction != MouseAction::None || win->annotationBeingDragged || win->annotationBeingResized) {
+            CanvasCancelDrag(win);
+        }
+        // as orig: the outgoing document leaves F11's display mode
+        DisplayModel* prevDm = win->AsFixed();
+        if (prevDm && win->IsFullScreen()) {
+            prevDm->ApplyFullscreenDisplayMode(false);
+        }
+    }
     win->currentTabTemp = tab;
     win->ctrl = tab->ctrl;
+    // as orig: the incoming document takes the window's presentation / F11 layout
+    if (DisplayModel* dm = tab->AsFixed()) {
+        if (dm->InPresentation() != win->InPresentation()) {
+            dm->SetInPresentation(win->InPresentation());
+        } else if (win->IsFullScreen()) {
+            dm->ApplyFullscreenDisplayMode(true);
+        }
+    }
     // this canvas size was already applied to the previous document
     win->lastViewPortSize = Size{};
     win->showSelection = tab->selectionOnPage != nullptr;
@@ -172,6 +202,11 @@ void LoadModelIntoTab(WindowTab* tab) {
     ShowPageInfoIfWanted(win);
     win->RedrawAll();
     LoadLazyTabIfNeeded(tab);
+    // its file changed while in the background: AutoReloadTick runs only for
+    // the current tab, so arm it now
+    if (tab->reloadOnFocus) {
+        tab->autoReload.Arm(kAutoReloadDelayInMs);
+    }
     StartPendingSearch(win);
 }
 
@@ -197,10 +232,7 @@ WindowTab* AddTabToWindow(MainWindow* win, WindowTab* tab, bool deferUpdate) {
     bool noHomeTab = gSettings->noHomeTab;
     bool createHomeTab = useTabs && !noHomeTab && (idx == 0);
     if (createHomeTab) {
-        auto* homeTab = new WindowTab(win);
-        homeTab->type = WindowTab::Type::About;
-        homeTab->canvasRc = win->canvasRc;
-        VecAppend(win->tabs, homeTab);
+        VecAppend(win->tabs, NewHomeTab(win, HomeTabKind::Pinned));
         idx++;
     }
 
@@ -237,20 +269,53 @@ void GoToHomeTab(MainWindow* win) {
     if (!win || !SettingsUseTabs()) {
         return;
     }
-    for (int i = 0; i < win->TabCount(); i++) {
-        if (win->GetTab(i)->IsAboutTab()) {
-            TabsSelect(win, i);
-            return;
-        }
+    WindowTab* homeTab = FindHomeTab(win);
+    if (homeTab) {
+        TabsSelect(win, win->GetTabIdx(homeTab));
+        HomePageFocusSearch(win);
+        return;
     }
 
     SaveCurrentWindowTab(win);
-    auto* homeTab = new WindowTab(win);
-    homeTab->type = WindowTab::Type::About;
-    homeTab->canvasRc = win->canvasRc;
+    homeTab = NewHomeTab(win, HomeTabKind::Pinned);
     VecInsertAt(win->tabs, 0, homeTab);
     TabsUIOnTabsChanged(win);
     LoadModelIntoTab(homeTab);
+    HomePageFocusSearch(win);
+}
+
+#if OS_WASM
+// A window has no tabs until its first document; wasm shows Home in the strip
+// from the start.
+void AddStartupHomeTab(MainWindow* win) {
+    if (!SettingsUseTabs() || gSettings->noHomeTab || win->TabCount() > 0) {
+        return;
+    }
+    WindowTab* homeTab = NewHomeTab(win, HomeTabKind::Pinned);
+    VecAppend(win->tabs, homeTab);
+    TabsUIOnTabsChanged(win);
+    LoadModelIntoTab(homeTab);
+}
+#endif
+
+// the "+" button: another Home tab after the last one. It stays out of the
+// session, which only stores documents
+void AddExtraHomeTab(MainWindow* win) {
+    if (!win || !SettingsUseTabs()) {
+        return;
+    }
+    // the first Home tab is pinned, unless NoHomeTab: a file opened from it must
+    // not leave a Home tab behind
+    if (win->TabCount() == 0 && !gSettings->noHomeTab) {
+        GoToHomeTab(win);
+        return;
+    }
+    SaveCurrentWindowTab(win);
+    WindowTab* homeTab = NewHomeTab(win, HomeTabKind::Extra);
+    VecAppend(win->tabs, homeTab);
+    TabsUIOnTabsChanged(win);
+    LoadModelIntoTab(homeTab);
+    HomePageFocusSearch(win);
 }
 
 void RemoveTab(WindowTab* tab) {
@@ -301,6 +366,11 @@ void MaybeMigrateTab(WindowTab* tab, MainWindow* newWin) {
     if (tab->IsNonDocumentTab()) {
         return;
     }
+    // wasm has one window: there is nowhere for the tab to go, and it must not
+    // be removed below
+    if (OS_WASM && !newWin) {
+        return;
+    }
     // don't migrate a lone document tab unless it is dropped on another window
     int nDocTabs = 0;
     for (WindowTab* t : oldWin->Tabs()) {
@@ -319,6 +389,8 @@ void MaybeMigrateTab(WindowTab* tab, MainWindow* newWin) {
     Str displayName = str::Dup(tab->displayName);
     TabState* state = NewTabStateFromTab(tab);
     RemoveTab(tab);
+    // the new tab takes the file: don't let ~WindowTab delete an open-cache copy
+    str::FreePtr(&tab->filePath);
     delete tab;
 
     if (!newWin) {
@@ -349,11 +421,10 @@ void MaybeMigrateTab(WindowTab* tab, MainWindow* newWin) {
         }
 #endif
     }
+    // the tab is already gone: if no window could be made, reopen the document
+    // where it was rather than lose it
     if (!newWin) {
-        DeleteTabState(state);
-        str::Free(path);
-        str::Free(displayName);
-        return;
+        newWin = oldWin;
     }
     logf("MaybeMigrateTab: '%s' -> window 0x%p\n", path, newWin);
     // orig re-opens the document in the new window rather than sliding the
@@ -379,14 +450,7 @@ void CloseAllTabs(MainWindow* win) {
     }
     // can't close while iterating over the tabs so collect them first
     Vec<WindowTab*> toClose;
-    int nTabs = win->TabCount();
-    for (int i = 0; i < nTabs; i++) {
-        WindowTab* t = win->GetTab(i);
-        if (t->IsAboutTab()) {
-            continue;
-        }
-        VecAppend(toClose, t);
-    }
+    CollectClosableTabs(win, toClose);
     CloseCollectedTabs(win, toClose);
 }
 
@@ -411,6 +475,9 @@ void MoveTab(MainWindow* win, int dir) {
     int idx = win->GetTabIdx(win->CurrentTab());
     int newIdx = idx + dir;
     if (idx < 0 || newIdx < 0 || newIdx >= nTabs) {
+        return;
+    }
+    if (win->GetTab(idx)->IsPinnedHomeTab() || win->GetTab(newIdx)->IsPinnedHomeTab()) {
         return;
     }
     WindowTab* tmp = win->tabs[idx];
@@ -523,6 +590,9 @@ void TabContextMenuCommand(MainWindow* win, WindowTab* tabUnderMouse, int cmdId)
             return;
         case CmdDuplicateInNewWindow:
             DuplicateTabInNewWindow(tabUnderMouse);
+            return;
+        case CmdDuplicateInNewTab:
+            DuplicateTabInNewTab(tabUnderMouse);
             return;
         case CmdSetTabColor:
             ShowSetTabColorDialog(win, tabUnderMouse);

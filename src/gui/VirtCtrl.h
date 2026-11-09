@@ -152,7 +152,6 @@ struct VirtCtrl : ILayout {
 
     Color GetColor(int idx) const;
     void SetColor(int idx, Color);
-    void ResetColors();
 
     // ILayout
     int MinIntrinsicHeight(int width) override;
@@ -217,7 +216,6 @@ struct VirtCtrl : ILayout {
     bool IsEnabled() const;
 
     HWND GetHwnd() const;
-    bool IsPaintable() const;
     bool IsHitTestable() const;
     void SetFlag(u32 f, bool on);
     bool HasFlag(u32 f) const;
@@ -252,7 +250,6 @@ bool IsVirtCtrlOfKind(VirtCtrl*, Kind);
 // and hit-tests those itself. A tree of only HWND controls yields none
 void CollectVirtCtrls(ILayout* root, Vec<VirtCtrl*>& out);
 void AppendVirtTreeDump(str::Builder& out, Str classFilter);
-bool AppendVirtHit(str::Builder& out, Str className, int x, int y);
 
 // One stop in a window's Tab ring: exactly one of the two is set. The ring is
 // the layout order, so an Edit and a virtual button sitting in the same VBox
@@ -326,6 +323,7 @@ struct VirtRoot {
     // the tops found in a layout tree; not owned
     void SetTops(const Vec<VirtCtrl*>&);
     void ForgetTops();
+    void DropStaleInputState();
     void SetBounds(Rect);
     void LayoutIfNeeded();
     void RequestLayout();
@@ -374,7 +372,6 @@ struct VirtScroll : VirtCtrl {
     void OnMouseWheel(VirtMouseEvent*);
     void OnPan(VirtMouseEvent*);
 
-    void SetContentDy(int);
     int MaxScrollY() const;
     bool ScrollTo(int y);
     bool ScrollBy(int dy);
@@ -467,6 +464,8 @@ struct VirtListBox : VirtCtrl {
     bool multiSelect = false;
     // the dashed outline while the list has the keys
     bool showFocusRing = true;
+    // false: rows cut by the viewport's edges are shown too
+    bool wholeRows = true;
 
     VirtListBox();
     ~VirtListBox() override;
@@ -502,7 +501,7 @@ struct VirtListBox : VirtCtrl {
     Rect ItemRect(int idx);
     void EnsureVisible(int idx);
     int ViewportDy();
-    // ViewportDy() rounded down to whole rows
+    // ViewportDy() rounded down to whole rows, if wholeRows
     int UsableDy();
     int MaxScrollY();
     bool ScrollTo(int y);
@@ -655,7 +654,6 @@ struct VirtText : VirtCtrl {
     Size Layout(Constraints bc) override;
     Size GetIdealSize() override;
 
-    Size MinIntrinsicSize(int width, int height);
     Size GetIdealSize(bool onlyIfEmpty);
     void SetText(Str);
 
@@ -836,6 +834,7 @@ struct VirtSlider : VirtCtrl {
     void SetValue(int v, bool notify);
     bool IsAdjusting() const;
     int ValueFromLocalX(int xLocal);
+    Rect ThumbHaloRectLocal() const;
     Size GetIdealSize() override;
     void Paint(VirtPaintCtx&) override;
     void OnKeyDown(VirtKeyEvent*);
@@ -851,11 +850,11 @@ struct VirtSlider : VirtCtrl {
     bool adjusting = false;
     int committed = 0;
     int ThumbRadius() const;
+    int HaloWidth() const;
     Rect TrackRectLocal() const;
+    Point ThumbCenterLocal() const;
     void ApplyFromEvent(const VirtMouseEvent&, bool commit);
 };
-
-VirtSlider* AsVirtSlider(ILayout*);
 
 struct VirtSpacer : VirtCtrl {
     Size idealSize;
@@ -957,6 +956,7 @@ struct VirtRichText : VirtCtrl {
     void AddPlainText(Str);
     void AddPlainLink(Str text, Str cmd);
     void LayoutText(int areaWidth);
+    void WrapToBounds();
     bool HasRichContent();
     TempStr PlainTextTemp();
     TipLink* LinkAt(Point ptLocal);
@@ -990,6 +990,7 @@ struct VirtFixedLinesText : VirtRichText {
 };
 
 VirtRichText* ParseTip(Str s);
+void TipLinkUnderlines(TipLink* link, Vec<Rect>& out);
 // "Enter run": the key as a key cap before the words, padded 8 on each side
 void InitKeyHint(VirtRichText* t, PlatformFont* font, Str key, Str desc, Color colTxt, Color colBg);
 VirtRichText* NewKeyHint(PlatformFont* font, Str key, Str desc, Color colTxt, Color colBg);

@@ -1,6 +1,7 @@
 /* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
+struct AIChatAPIRequest;
 struct SelectionOnPage;
 struct MainWindow;
 struct DocController;
@@ -12,6 +13,7 @@ struct TocTree;
 struct TabState;
 struct Annotation;
 struct WatchedFile;
+struct HexView;
 #if !defined(SUMATRA_NG)
 struct LoadArgs;
 #endif
@@ -22,27 +24,45 @@ enum class SidebarContent {
     Bookmarks,
     Thumbnails,
     Favorites,
+    Layers,
 };
 #else
+struct PdfSigResult;
+
 // what a sidebar panel shows
 enum class SidebarView {
     Bookmarks,
     Thumbnails,
     Favorites,
+    Signatures,
+    Layers,
 };
-constexpr int kSidebarViewCount = 3;
+constexpr int kSidebarViewCount = 5;
+static_assert(kSidebarViewCount == (int)SidebarView::Layers + 1);
 
 SidebarView SidebarViewFromStr(Str s, SidebarView def);
 Str SidebarViewToStr(SidebarView);
 #endif
 
+// why a started auto-scroll isn't moving; one reason at a time
+enum class AutoScrollStop {
+    None, // scrolling
+    User,
+    AtEnd,     // reached the end in the scroll direction
+    TimeUp,    // ReadingAutoScrollMinutes ran out
+    Minimized, // resumes on restore
+};
+
 struct AutoScroll {
     bool on = false;
-    bool paused = false;
-    bool atEnd = false;
+    AutoScrollStop stop = AutoScrollStop::None;
     int dir = 1;
     float accum = 0;
     i64 lastQpc = 0;
+    // seconds scrolled since start, for ReadingAutoScrollMinutes
+    float runSec = 0;
+
+    bool IsStopped() const { return stop != AutoScrollStop::None; }
 };
 
 struct ReadingBarTab {
@@ -52,9 +72,17 @@ struct ReadingBarTab {
 
 // per-tab state of one AI chat provider (see AIChatPanel.cpp)
 struct AIChatTabState {
+    ~AIChatTabState();
     Str sessionId;
     str::Builder chatLog;
+    AIChatAPIRequest* apiRequest = nullptr;
+    str::Builder apiMessages;
+    str::Builder apiReply;
+    Str apiIdentity;
+    bool apiFailed = false;
     void* process = nullptr;
+    // the running turn, 0 if none: its updates are routed by this
+    int turnId = 0;
 };
 
 /* Data related to a single document loaded into a tab/window */
@@ -72,9 +100,11 @@ struct WindowTab {
         About,
         Document,
         Favorites, // full-window favorites list (CmdFavoriteShowInTab)
+        HexView,   // filePath's bytes (CmdViewAsHex)
     };
     MainWindow* win = nullptr;
     DocController* ctrl = nullptr;
+    HexView* hex = nullptr;
     u64 loadStartedAt = 0;
 #if !defined(SUMATRA_NG)
     // network-drive copy progress while loading (-1 = not in copy phase)
@@ -101,7 +131,7 @@ struct WindowTab {
     u64 autoReloadStartMs = 0;
     FILETIME autoReloadModTime{};
 #if defined(SUMATRA_NG)
-    int autoReloadLeftMs = 0;
+    Countdown autoReload;
 #endif
     ReadAloudHighlightMap* readAloudHighlight = nullptr;
     Str filePath;
@@ -117,7 +147,7 @@ struct WindowTab {
     Str readAloudText;
     // per-provider AI chat state, indexed by AIChatBackend
     // (0 = Claude, 1 = Grok, 2 = Codex, 3 = AntiGravity)
-    AIChatTabState aiChat[4];
+    AIChatTabState aiChat[kAIChatProviderCount];
     Type type = Type::None;
     LoadState loadState = LoadState::None;
     // previous View settings, needed when unchecking the Fit Width/Page toolbar buttons
@@ -158,11 +188,17 @@ struct WindowTab {
 #else
     // what the sidebar's top panel shows (showToc: whether it does)
     SidebarView sidebarView = SidebarView::Bookmarks;
+    // what checking the signatures found; set by a background job. Owned
+    PdfSigResult* signatures = nullptr;
 #endif
     // whether to auto-reload the document when the tab is selected
     bool reloadOnFocus = false;
     // opened via CmdOpenFileNoHistory: do not write File History / Windows Recent
     bool skipHistory = false;
+    // a Home tab from the "+" button: an ordinary tab, unlike the pinned first one
+    bool isExtraHome = false;
+    // the temporary-folder notification was shown for filePath (#6437)
+    bool temporaryFileNotified = false;
 
     // TODO: terrible hack
     bool askedToSaveAnnotations = false;
@@ -189,9 +225,14 @@ struct WindowTab {
     WindowTab(const WindowTab&) = delete;
     WindowTab& operator=(const WindowTab&) = delete;
     ~WindowTab();
+#if !defined(SUMATRA_NG)
+    void DropPendingLoad();
+#endif
 
     bool IsAboutTab() const;
+    bool IsPinnedHomeTab() const;
     bool IsFavoritesTab() const;
+    bool IsHexTab() const;
     bool IsNonDocumentTab() const;
 
     DisplayModel* AsFixed() const;
@@ -217,3 +258,6 @@ bool SaveDataToFile(HWND hwndParent, Str fileName, Str data);
 #endif
 
 bool IsPdfDoc(WindowTab* tab);
+bool IsEpubDoc(WindowTab* tab);
+bool IsMupdfNonPdfDoc(WindowTab* tab);
+bool IsCajDoc(WindowTab* tab);

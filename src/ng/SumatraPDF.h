@@ -123,8 +123,10 @@ enum class PlaceWindowWhen {
 void PlaceMainWindow(MainWindow* win, SessionData* data, PlaceWindowWhen when);
 void PlaceMainWindowLater(MainWindow* win, Rect pos, bool maximize);
 void DuplicateTabInNewWindow(WindowTab* tab);
+void DuplicateTabInNewTab(WindowTab* tab);
 void ReloadDocument(MainWindow* win, bool autoRefresh);
 bool ForwardBrowserMsg(MainWindow* win, UINT msg, WPARAM wp, LPARAM lp);
+bool ScrollBrowserDocKey(MainWindow* win, int vk);
 // the shell's tick: the delayed reload the file watcher asked for
 void AutoReloadTick(MainWindow* win, int elapsedMs);
 // next / prev openable file in the current document's folder (no wrap)
@@ -132,6 +134,9 @@ void OpenNextPrevFileInFolder(MainWindow* win, bool forward, Str pathToDelete = 
 // the page-info tip (CmdTogglePageInfo): put it up or refresh it when the
 // user asked for it and a document is loaded
 void ShowPageInfoIfWanted(MainWindow* win);
+bool PageInfoBarTakesRow(MainWindow* win);
+bool PageInfoBarOverlays(MainWindow* win);
+void PageInfoBarTextTemp(MainWindow* win, TempStr* leftOut, TempStr* rightOut);
 #if OS_WIN
 void ShowDefaultAppNotification(MainWindow* win, const StrVec& missing);
 // orig's window picker. hwndRestore gets focus back when the picker closes.
@@ -230,7 +235,6 @@ constexpr int kToolbarOverlay = 2;
 extern SeqStrings gToolbarModeNames;
 
 int ToolbarModeFromPrefs();
-bool ToolbarModeIsOverlay();
 bool ToolbarModeIsHidden();
 void SetToolbarMode(int mode);
 int FullscreenToolbarModeFromPrefs();

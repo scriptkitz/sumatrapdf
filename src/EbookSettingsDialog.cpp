@@ -18,6 +18,7 @@
 #include "EngineBase.h"
 #include "base/GuessFileType.h"
 #include "EngineAll.h"
+#include "AIChatTypes.h"
 #include "WindowTab.h"
 #include "MainWindow.h"
 #include "FileHistory.h"
@@ -106,12 +107,6 @@ EbookSettingsWnd::~EbookSettingsWnd() {
 
 static void ClearEbookSettingsWnd() {
     gEbookSettingsWnd = nullptr;
-}
-
-// a multi-line edit shows only CRLF as a line break, while our CSS (and what
-// we store in the settings) uses LF
-static TempStr ToEditTextTemp(Str s) {
-    return str::LFToCRLFTemp(s);
 }
 
 static TempStr FromEditTextTemp(Str s) {
@@ -213,7 +208,7 @@ void EbookSettingsWnd::SetValues(Str fontName, float fontSize, const Vec<float>*
 
     SetCssEditable(hasCustom);
     if (hasCustom) {
-        editCss->SetText(ToEditTextTemp(customCss));
+        editCss->SetText(str::LFToCRLFTemp(customCss));
     }
     UpdateCssPreview();
 }
@@ -264,7 +259,7 @@ void EbookSettingsWnd::UpdateCssPreview() {
     // is opened (EngineCreate.cpp)
     TempStr css = EbookGeneratedCssTemp(font, &margin, ParseFloatTemp(editSpacing), DpiGet());
     Str text = css ? css : Tr("The document's own styling is used.");
-    editCss->SetText(ToEditTextTemp(text));
+    editCss->SetText(str::LFToCRLFTemp(text));
 }
 
 void EbookSettingsWnd::OnControlChanged() {
@@ -284,7 +279,7 @@ void EbookSettingsWnd::OnCustomCssToggled() {
         if (len(customCssText) == 0) {
             str::ReplaceWithCopy(&customCssText, FromEditTextTemp(editCss->GetTextTemp()));
         }
-        editCss->SetText(ToEditTextTemp(customCssText));
+        editCss->SetText(str::LFToCRLFTemp(customCssText));
     } else {
         str::ReplaceWithCopy(&customCssText, FromEditTextTemp(editCss->GetTextTemp()));
     }
@@ -406,7 +401,7 @@ bool EbookSettingsWnd::Create(MainWindow* mainWin) {
     win = mainWin;
     Color colTxt = ThemeWindowTextColor();
     Color colBg = ThemeWindowControlBackgroundColor();
-    Color colMuted = ThemeWindowTextDisabledColor();
+    Color colMuted = ThemeWindowDarkerTextColor();
     PlatformFont* fontText = DlgUiFont(kToolDlgTextFontPx);
     SetFont(fontText);
     bool isRtl = IsUIRtl();
